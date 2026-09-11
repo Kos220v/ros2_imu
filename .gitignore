@@ -1,0 +1,33 @@
+# STM32CubeIDE
+Debug/
+Release/
+*.launch
+.mxproject
+
+# colcon / ROS
+build/
+install/
+log/
+ros2/**/build/
+ros2/**/install/
+ros2/**/log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# C
+*.o
+*.a
+
+# Host test binary
+/tmp/imu_host_test
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store

@@ -200,6 +200,14 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /* USER CODE BEGIN 1 */
+/**
+  * @brief This function handles USART2 global interrupt (IMU protocol RX).
+  */
+void USART2_IRQHandler(void)
+{
+  extern UART_HandleTypeDef huart2;
+  HAL_UART_IRQHandler(&huart2);
+}
 
 /* USER CODE END 1 */
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
