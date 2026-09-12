@@ -43,6 +43,7 @@ static uint32_t s_last_send_tick;
 static uint32_t s_last_mpu_ok_tick;
 static uint32_t s_last_diag_tick;
 static imu_result_t s_last_res;
+static imu_sample_t s_last_raw; /* последний сырой отсчёт в осях чипов (diag) */
 
 /* ---------- Передача ---------- */
 
@@ -349,6 +350,10 @@ static void imu_diag_status(uint32_t now)
                r->fused_9x ? "9x" : "6x", (unsigned)s_fusion.calib.rate_hz,
                (unsigned)s_stats.frames_sent, (unsigned)mpu_age, (unsigned)mag_age,
                (unsigned)send_age);
+    dbg_printf("  RAW a=(%.2f %.2f %.2f) m=(%.1f %.1f %.1f) [оси чипов, до "
+               "remap/калибровки]\r\n",
+               s_last_raw.ax, s_last_raw.ay, s_last_raw.az,
+               s_last_raw.mx, s_last_raw.my, s_last_raw.mz);
 }
 
 /* ---------- Инициализация ---------- */
@@ -589,6 +594,7 @@ void ImuApp_Process(void)
     imu_sample_t sample;
     memset(&sample, 0, sizeof(sample));
     imu_poll_sensors(&sample, now);
+    s_last_raw = sample;
     if (!s_mpu_ok && s_stats.frames_sent == 0) {
         /* MPU так и не поднялся - не спамим, ждём */
         return;
