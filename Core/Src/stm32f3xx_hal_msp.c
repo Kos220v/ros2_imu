@@ -89,7 +89,11 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
   if(hi2c->Instance==I2C1)
   {
   /* USER CODE BEGIN I2C1_MspInit 0 */
-
+    /* PA15 по умолчанию — JTDO (JTAG): без отключения JTAG-DP он не работает
+       как I2C1_SCL и шина молчит. Отключаем JTAG-DP, SWD (PA13/PA14) остаётся. */
+    __HAL_RCC_AFR_CLK_ENABLE();
+    AFIO->MAPR = (uint32_t)((AFIO->MAPR & (uint32_t)~AFIO_MAPR_SWJ_CFG) |
+                            AFIO_MAPR_SWJ_CFG_1);
   /* USER CODE END I2C1_MspInit 0 */
 
     __HAL_RCC_GPIOA_CLK_ENABLE();

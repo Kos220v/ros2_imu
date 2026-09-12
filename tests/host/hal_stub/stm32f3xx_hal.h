@@ -29,6 +29,8 @@ typedef struct {
 
 #define I2C_MEMADD_SIZE_8BIT 1u
 
+#define SystemCoreClock 72000000u /* тестовое значение */
+
 typedef struct {
     uint32_t TypeErase;
     uint32_t PageAddress;
@@ -90,8 +92,11 @@ typedef struct {
 int stub_i2c_write_count(void);
 const stub_i2c_write_t *stub_i2c_writes(void);
 
-/* UART: какой хэндл считается "данными" (остальные игнорируются) */
+/* UART: какой хэндл считается "данными"; отладочный порт записывается отдельно */
 void stub_uart_set_data_handle(UART_HandleTypeDef *huart);
+void stub_uart_set_dbg_handle(UART_HandleTypeDef *huart);
+const uint8_t *stub_dbg_peek(void);
+size_t stub_dbg_len(void);
 const uint8_t *stub_uart_tx_data(void);
 size_t stub_uart_tx_len(void);
 void stub_uart_tx_clear(void);

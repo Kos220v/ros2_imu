@@ -24,8 +24,8 @@ void dbg_print(const char *s)
     }
 }
 
-/* Мини-printf без float (чтобы не тянуть тяжёлую поддержку %f). */
-static void emit_int(char *buf, size_t cap, size_t *pos, int32_t v)
+static void emit_int(char *buf, size_t cap, size_t *pos, int32_t v,
+                     int width, int zero_pad)
 {
     char tmp[12];
     int len = 0;
@@ -34,6 +34,7 @@ static void emit_int(char *buf, size_t cap, size_t *pos, int32_t v)
         if (*pos < cap) {
             buf[(*pos)++] = '-';
         }
+        width -= 1;
         u = (uint32_t)(-(v + 1)) + 1u;
     } else {
         u = (uint32_t)v;
@@ -42,12 +43,18 @@ static void emit_int(char *buf, size_t cap, size_t *pos, int32_t v)
         tmp[len++] = (char)('0' + (u % 10u));
         u /= 10u;
     } while (u > 0 && len < (int)sizeof(tmp));
+    if (zero_pad && width > len) {
+        for (int i = len; i < width && (int)*pos < (int)cap - 1; i++) {
+            buf[(*pos)++] = '0';
+        }
+    }
     while (len > 0 && *pos < cap) {
         buf[(*pos)++] = tmp[--len];
     }
 }
 
-static void emit_uint(char *buf, size_t cap, size_t *pos, uint32_t v, int hex)
+static void emit_uint(char *buf, size_t cap, size_t *pos, uint32_t v, int hex,
+                      int width, int zero_pad)
 {
     char tmp[12];
     int len = 0;
@@ -57,11 +64,54 @@ static void emit_uint(char *buf, size_t cap, size_t *pos, uint32_t v, int hex)
         tmp[len++] = dig[v % base];
         v /= base;
     } while (v > 0 && len < (int)sizeof(tmp));
+    if (zero_pad && width > len) {
+        for (int i = len; i < width && (int)*pos < (int)cap - 1; i++) {
+            buf[(*pos)++] = '0';
+        }
+    }
     while (len > 0 && *pos < cap) {
         buf[(*pos)++] = tmp[--len];
     }
 }
 
+/* Дробное: фиксированная десятичная точка, ровно 2 знака (%f). */
+static void emit_float(char *buf, size_t cap, size_t *pos, double d, int width)
+{
+    char tmp[24];
+    int len = 0;
+    float f = (float)d;
+    if (f < 0.0f) {
+        tmp[len++] = '-';
+        f = -f;
+    }
+    uint32_t ip = (uint32_t)f;
+    uint32_t fp = (uint32_t)((f - (float)ip) * 100.0f + 0.5f);
+    if (fp >= 100u) {
+        ip++;
+        fp -= 100u;
+    }
+    char num[12];
+    int nlen = 0;
+    do {
+        num[nlen++] = (char)('0' + (ip % 10u));
+        ip /= 10u;
+    } while (ip > 0 && nlen < (int)sizeof(num));
+    for (int i = nlen - 1; i >= 0; i--) {
+        tmp[len++] = num[i];
+    }
+    tmp[len++] = '.';
+    tmp[len++] = (char)('0' + (fp / 10u) % 10u);
+    tmp[len++] = (char)('0' + (fp % 10u));
+    for (int i = len; i < width && (int)*pos < (int)cap - 1; i++) {
+        buf[(*pos)++] = ' ';
+    }
+    while (len > 0 && *pos < cap) {
+        buf[(*pos)++] = tmp[--len];
+    }
+}
+
+/* Формат: %s %d %u %x %c %f; ширина и нули: %02x, %-подобного нет
+ * (width без знака = пробелы, с '0' = нули). */
 void dbg_printf(const char *fmt, ...)
 {
     if (!dbg_uart || !fmt) {
@@ -77,16 +127,35 @@ void dbg_printf(const char *fmt, ...)
             continue;
         }
         p++;
+        if (*p == '\0') {
+            break;
+        }
+        int width = 0;
+        int zero_pad = 0;
+        if (*p == '0') {
+            zero_pad = 1;
+            p++;
+        }
+        while (*p >= '0' && *p <= '9' && width < 10) {
+            width = width * 10 + (*p - '0');
+            p++;
+        }
         switch (*p) {
         case 'd':
         case 'i':
-            emit_int(buf, sizeof(buf) - 1, &pos, va_arg(ap, int));
+            emit_int(buf, sizeof(buf) - 1, &pos, va_arg(ap, int), width,
+                     zero_pad);
             break;
         case 'u':
-            emit_uint(buf, sizeof(buf) - 1, &pos, va_arg(ap, unsigned int), 0);
+            emit_uint(buf, sizeof(buf) - 1, &pos, va_arg(ap, unsigned int), 0,
+                      width, zero_pad);
             break;
         case 'x':
-            emit_uint(buf, sizeof(buf) - 1, &pos, va_arg(ap, unsigned int), 1);
+            emit_uint(buf, sizeof(buf) - 1, &pos, va_arg(ap, unsigned int), 1,
+                      width, zero_pad);
+            break;
+        case 'f':
+            emit_float(buf, sizeof(buf) - 1, &pos, va_arg(ap, double), width);
             break;
         case 'c': {
             int c = va_arg(ap, int);
@@ -107,6 +176,10 @@ void dbg_printf(const char *fmt, ...)
             buf[pos++] = '%';
             break;
         default:
+            buf[pos++] = '%';
+            if (*p) {
+                buf[pos++] = *p;
+            }
             break;
         }
     }

@@ -53,7 +53,7 @@ run.bat        :: установит pyserial при первом запуске
 ## Тесты без железа
 
 ```bash
-./tests/run_host_tests.sh   # C-тесты (149 проверок) + Python-тесты протокола
+./tests/run_host_tests.sh   # C-тесты (161 проверка) + Python-тесты протокола
 ```
 
 ## Лицензия

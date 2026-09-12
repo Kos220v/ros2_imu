@@ -37,6 +37,13 @@ static uint8_t s_mpu_ok, s_mag_ok;
 static uint8_t s_mpu_err_cnt, s_mag_err_cnt;
 static uint8_t s_last_progress_sent;
 
+/* Диагностика */
+#define IMU_DIAG_PERIOD_MS 10000u
+static uint32_t s_last_send_tick;
+static uint32_t s_last_mpu_ok_tick;
+static uint32_t s_last_diag_tick;
+static imu_result_t s_last_res;
+
 /* ---------- Передача ---------- */
 
 static void imu_send(uint8_t msg_id, const uint8_t *payload, uint8_t len)
@@ -45,6 +52,7 @@ static void imu_send(uint8_t msg_id, const uint8_t *payload, uint8_t len)
     size_t n = imu_proto_encode(msg_id, payload, len, frame, sizeof(frame));
     if (n > 0) {
         if (HAL_UART_Transmit(s_huart, frame, (uint16_t)n, IMU_UART_TX_TIMEOUT_MS) == HAL_OK) {
+            s_last_send_tick = HAL_GetTick();
             if (msg_id == IMU_MSG_ORIENTATION) {
                 s_stats.frames_sent++;
             }
@@ -242,6 +250,107 @@ static void imu_handle_cmd(uint8_t id, const uint8_t *p, uint8_t len)
     }
 }
 
+/* ---------- Диагностика (вывод в USART1) ---------- */
+
+static int probe_addr(uint8_t addr7)
+{
+    return HAL_I2C_IsDeviceReady(s_hi2c, (uint16_t)addr7 << 1, 3,
+                                 IMU_I2C_TIMEOUT_MS) == HAL_OK;
+}
+
+static void imu_diag_boot(void)
+{
+    dbg_print("\r\n=== IMU DIAG: BOOT ===\r\n");
+    dbg_printf("CLK: SYSCLK %u MHz (HCLK /2, PCLK1 /1), I2C1 <- HSI 8 MHz\r\n",
+               (unsigned)(SystemCoreClock / 1000000u));
+    dbg_printf("I2C1 SCAN: 0x68=%d 0x69=%d 0x0D=%d 0x1E=%d\r\n",
+               probe_addr(0x68u), probe_addr(0x69u),
+               probe_addr(0x0Du), probe_addr(0x1Eu));
+    uint8_t who = 0;
+    if (probe_addr(IMU_MPU6050_ADDR7)) {
+        (void)HAL_I2C_Mem_Read(s_hi2c, (uint16_t)IMU_MPU6050_ADDR7 << 1, 0x75u,
+                               I2C_MEMADD_SIZE_8BIT, &who, 1, IMU_I2C_TIMEOUT_MS);
+        dbg_printf("MPU WHO_AM_I: 0x%02x (ожидаем 0x68 при AD0=GND)\r\n",
+                   (unsigned)who);
+    }
+    uint8_t cid = 0;
+    if (probe_addr(0x0Du)) {
+        (void)HAL_I2C_Mem_Read(s_hi2c, 0x1Au, 0x0Du, I2C_MEMADD_SIZE_8BIT,
+                               &cid, 1, IMU_I2C_TIMEOUT_MS);
+        dbg_printf("MAG@0x0D CHIP_ID: 0x%02x (ожидаем 0xff = QMC5883L/HA5883)\r\n",
+                   (unsigned)cid);
+    }
+    uint8_t id3[3] = {0, 0, 0};
+    if (probe_addr(0x1Eu)) {
+        (void)HAL_I2C_Mem_Read(s_hi2c, 0x3Cu, 0x0Au, I2C_MEMADD_SIZE_8BIT, &id3[0],
+                               1, IMU_I2C_TIMEOUT_MS);
+        (void)HAL_I2C_Mem_Read(s_hi2c, 0x3Cu, 0x0Bu, I2C_MEMADD_SIZE_8BIT, &id3[1],
+                               1, IMU_I2C_TIMEOUT_MS);
+        (void)HAL_I2C_Mem_Read(s_hi2c, 0x3Cu, 0x0Cu, I2C_MEMADD_SIZE_8BIT, &id3[2],
+                               1, IMU_I2C_TIMEOUT_MS);
+        dbg_printf("MAG@0x1E ID: %c%c%c (ожидаем 'H43' = HMC5883L)\r\n",
+                   (char)id3[0], (char)id3[1], (char)id3[2]);
+    }
+}
+
+static void imu_diag_sensors(void)
+{
+    if (s_mpu_ok) {
+        float ax, ay, az, gx, gy, gz, t;
+        if (mpu6050_read(&s_mpu, &ax, &ay, &az, &gx, &gy, &gz, &t) == HAL_OK) {
+            dbg_printf("MPU data: a=(%.2f %.2f %.2f) m/s2 g=(%.3f %.3f %.3f) "
+                       "rad/s T=%.1f C\r\n",
+                       ax, ay, az, gx, gy, gz, t);
+        } else {
+            dbg_print("MPU data: ошибка чтения (таймаут I2C?)\r\n");
+        }
+    } else {
+        dbg_print("MPU data: датчик не найден\r\n");
+    }
+    if (s_mag_ok) {
+        float mx, my, mz;
+        HAL_StatusTypeDef st = qmc5883l_read(&s_mag, &mx, &my, &mz);
+        if (st == HAL_OK) {
+            dbg_printf("MAG data: (%.1f %.1f %.1f) uT | %s @0x%02x\r\n",
+                       mx, my, mz,
+                       s_mag.type == MAG5883_HMC ? "HMC5883L" : "QMC5883L/HA5883",
+                       (unsigned)(s_mag.dev_addr >> 1));
+        } else {
+            dbg_print("MAG data: нет свежих данных (HAL_BUSY) или ошибка\r\n");
+        }
+    } else {
+        dbg_print("MAG data: датчик не найден\r\n");
+    }
+    dbg_print("=== IMU DIAG: BOOT END ===\r\n");
+}
+
+static void imu_diag_status(uint32_t now)
+{
+    const imu_result_t *r = &s_last_res;
+    dbg_printf("ST t=%u s | MPU %s (err %u) MAG %s (err %u)\r\n",
+               (unsigned)(now / 1000u),
+               s_mpu_ok ? "ok" : "FAIL", (unsigned)s_stats.mpu_errors,
+               s_mag_ok ? (s_mag.type == MAG5883_HMC ? "ok(HMC)" : "ok(QMC)")
+                        : "FAIL",
+               (unsigned)s_stats.mag_errors);
+    dbg_printf("  q=(%.3f %.3f %.3f %.3f) rpy=(%.1f %.1f %.1f) az=%.1f deg\r\n",
+               r->qw, r->qx, r->qy, r->qz, r->roll_deg, r->pitch_deg,
+               r->yaw_deg, r->azimuth_deg);
+    dbg_printf("  g=(%.3f %.3f %.3f) rad/s a=(%.2f %.2f %.2f) m/s2 T=%.1f C\r\n",
+               r->wx, r->wy, r->wz, r->ax, r->ay, r->az, s_last_temp);
+    uint32_t mpu_age = s_mpu_ok ? (uint32_t)(now - s_last_mpu_ok_tick) : 9999u;
+    uint32_t mag_age = s_mag_ok ? (uint32_t)(now - s_last_mag_ok_tick) : 9999u;
+    uint32_t send_age = s_stats.frames_sent > 0
+                            ? (uint32_t)(now - s_last_send_tick)
+                            : 9999u;
+    dbg_printf("  m=(%.1f %.1f %.1f) uT %s | %u Hz frames=%u mpu_age=%u ms "
+               "mag_age=%u ms send_age=%u ms\r\n",
+               s_last_mx, s_last_my, s_last_mz,
+               r->fused_9x ? "9x" : "6x", (unsigned)s_fusion.calib.rate_hz,
+               (unsigned)s_stats.frames_sent, (unsigned)mpu_age, (unsigned)mag_age,
+               (unsigned)send_age);
+}
+
 /* ---------- Инициализация ---------- */
 
 void ImuApp_Init(I2C_HandleTypeDef *hi2c, UART_HandleTypeDef *huart_data,
@@ -256,6 +365,7 @@ void ImuApp_Init(I2C_HandleTypeDef *hi2c, UART_HandleTypeDef *huart_data,
     dbg_init(huart_dbg);
     dbg_printf("\r\nIMU %s fw %d.%d.%d\r\n", IMU_BOARD_NAME, IMU_FW_VERSION_MAJOR,
                IMU_FW_VERSION_MINOR, IMU_FW_VERSION_PATCH);
+    imu_diag_boot();
 
     /* Калибровка из flash или defaults */
     imu_calib_t calib;
@@ -293,6 +403,7 @@ void ImuApp_Init(I2C_HandleTypeDef *hi2c, UART_HandleTypeDef *huart_data,
     } else {
         dbg_print("MAG: FAIL\r\n");
     }
+    imu_diag_sensors();
 
     /* Если гироскоп не калиброван - автокалибровка при старте (не трогать плату!) */
     if (s_mpu_ok && !s_fusion.calib.gyro_calibrated) {
@@ -334,6 +445,7 @@ static void imu_poll_sensors(imu_sample_t *s, uint32_t now)
         s_mpu_ok = 1;
         s_mpu_err_cnt = 0;
         s_last_temp = t;
+        s_last_mpu_ok_tick = now;
         last_ax = ax;
         last_ay = ay;
         last_az = az;
@@ -447,6 +559,15 @@ void ImuApp_Process(void)
         imu_handle_cmd(id, payload, len);
     }
 
+    /* 1b. Периодическая диагностика (каждые IMU_DIAG_PERIOD_MS) */
+    {
+        uint32_t now_d = HAL_GetTick();
+        if ((uint32_t)(now_d - s_last_diag_tick) >= IMU_DIAG_PERIOD_MS) {
+            s_last_diag_tick = now_d;
+            imu_diag_status(now_d);
+        }
+    }
+
     /* 2. Планировщик опроса по тикам */
     uint32_t now = HAL_GetTick();
     uint32_t period = 1000u / (uint32_t)s_fusion.calib.rate_hz;
@@ -494,6 +615,7 @@ void ImuApp_Process(void)
     /* 5. Fusion + выдача */
     imu_result_t res;
     imu_fusion_update(&s_fusion, &sample, &res);
+    s_last_res = res;
     imu_stream(&res, now);
 }
 

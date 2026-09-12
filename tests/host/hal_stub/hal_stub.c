@@ -12,6 +12,10 @@ static UART_HandleTypeDef *s_data_huart;
 static uint8_t s_tx[STUB_TX_CAP];
 static size_t s_tx_len;
 
+static UART_HandleTypeDef *s_dbg_huart;
+static uint8_t s_dbg_tx[8192];
+static size_t s_dbg_len;
+
 static UART_HandleTypeDef *s_rx_huart;
 static uint8_t *s_rx_ptr;
 static uint16_t s_rx_size;
@@ -38,6 +42,8 @@ void stub_reset(void)
 {
     s_tick = 0;
     s_tx_len = 0;
+    s_dbg_huart = NULL;
+    s_dbg_len = 0;
     s_rx_huart = NULL;
     s_rx_ptr = NULL;
     s_rx_size = 0;
@@ -258,6 +264,21 @@ void stub_uart_set_data_handle(UART_HandleTypeDef *huart)
     s_data_huart = huart;
 }
 
+void stub_uart_set_dbg_handle(UART_HandleTypeDef *huart)
+{
+    s_dbg_huart = huart;
+}
+
+const uint8_t *stub_dbg_peek(void)
+{
+    return s_dbg_tx;
+}
+
+size_t stub_dbg_len(void)
+{
+    return s_dbg_len;
+}
+
 const uint8_t *stub_uart_tx_data(void)
 {
     return s_tx;
@@ -278,7 +299,18 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *huart, const uint8_t *pD
 {
     (void)Timeout;
     if (huart != s_data_huart) {
-        return HAL_OK; /* отладочный порт: игнорируем */
+        if (s_dbg_huart && huart == s_dbg_huart) {
+            size_t room = (s_dbg_len < sizeof(s_dbg_tx) - 1u)
+                              ? (sizeof(s_dbg_tx) - 1u - s_dbg_len)
+                              : 0u;
+            size_t n = (Size < room) ? Size : room;
+            if (n > 0) {
+                memcpy(&s_dbg_tx[s_dbg_len], pData, n);
+                s_dbg_len += n;
+                s_dbg_tx[s_dbg_len] = '\0';
+            }
+        }
+        return HAL_OK; /* отладочный порт */
     }
     size_t room = (s_tx_len < STUB_TX_CAP) ? (STUB_TX_CAP - s_tx_len) : 0;
     size_t n = (Size < room) ? Size : room;

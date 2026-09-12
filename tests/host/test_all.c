@@ -735,6 +735,48 @@ static void test_mag_hmc(void)
     CHECK_CLOSE(mz, -45.0f, 0.01f, "dual z");
 }
 
+/* ---------- 12. Диагностика (вывод в отладочный UART) ---------- */
+
+static void test_diag(void)
+{
+    stub_reset();
+    static I2C_HandleTypeDef hi2c;
+    static UART_HandleTypeDef huart_data, huart_dbg;
+    stub_uart_set_data_handle(&huart_data);
+    stub_uart_set_dbg_handle(&huart_dbg);
+
+    ImuApp_Init(&hi2c, &huart_data, &huart_dbg);
+    ImuApp_CommsStart();
+
+    const char *d = (const char *)stub_dbg_peek();
+    CHECK(strstr(d, "IMU DIAG: BOOT") != NULL, "diag banner");
+    CHECK(strstr(d, "I2C1 SCAN: 0x68=1 0x69=0 0x0D=1 0x1E=0") != NULL,
+          "i2c scan line");
+    CHECK(strstr(d, "WHO_AM_I: 0x68") != NULL, "mpu who am i");
+    CHECK(strstr(d, "CHIP_ID: 0xff") != NULL, "mag chip id");
+    CHECK(strstr(d, "MPU data: a=") != NULL, "mpu first read");
+    CHECK(strstr(d, "MAG data: (") != NULL, "mag first read");
+
+    /* Периодический статус после 10 с */
+    stub_tick_set(10000);
+    ImuApp_Process();
+    d = (const char *)stub_dbg_peek();
+    CHECK(strstr(d, "ST t=10 s") != NULL, "periodic status line");
+    CHECK(strstr(d, "frames=") != NULL, "frames in status");
+    CHECK(strstr(d, "send_age=") != NULL, "send_age in status");
+
+    /* Датчиков нет: диагностика показывает пустой scan и "не найден" */
+    stub_reset();
+    stub_i2c_set_present(0, 0);
+    stub_uart_set_dbg_handle(&huart_dbg);
+    ImuApp_Init(&hi2c, &huart_data, &huart_dbg);
+    d = (const char *)stub_dbg_peek();
+    CHECK(strstr(d, "I2C1 SCAN: 0x68=0 0x69=0 0x0D=0 0x1E=0") != NULL,
+          "scan all absent");
+    CHECK(strstr(d, "MPU data: датчик не найден") != NULL, "mpu not detected");
+    CHECK(strstr(d, "MAG data: датчик не найден") != NULL, "mag not detected");
+}
+
 int main(void)
 {
     test_crc();
@@ -749,6 +791,7 @@ int main(void)
     test_zero_yaw();
     test_drivers();
     test_mag_hmc();
+    test_diag();
     test_flash();
     test_app_loop();
 
