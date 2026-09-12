@@ -58,6 +58,14 @@ make_exe.bat
 - с платой: `dist\imu_viewer.exe` (выбрать COM-порт, 115200);
 - симуляция: `dist\imu_viewer.exe --sim`.
 
+Если скрипт говорит «Python НЕ найден» (или появляется сообщение
+«Python was not found; run without arguments to install from the
+Microsoft Store») — в системе нет настоящего интерпретатора, а `python`
+в PATH — это алиас Windows Store. Установите Python 3.9+ с
+python.org, отметив при установке «Add Python to PATH», и запустите
+`make_exe.bat` снова (бат ищет также лаунчер `py` и типовые каталоги
+установки).
+
 Замечания:
 
 - Консольное окно рядом с GUI — намеренно: в нём видны ошибки
