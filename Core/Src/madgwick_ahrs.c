@@ -33,9 +33,11 @@ void madgwick_init_from_accel_mag(madgwick_t *f,
         return; /* нет данных - оставляем как было */
     }
     /* Крен/тангаж из акселерометра (согласованы с madgwick_euler_nwu:
-     * крен + при крене вправо, тангаж + при наклоне носом вниз). */
+     * крен + при левом крае вверх, тангаж + при носу вверх). В нашей
+     * системе (Y влево, Z вверх) угол тангажа ZYX-разложения имеет знак,
+     * противоположный физическому, поэтому подставляем -atan2(...). */
     float roll = atan2f(ay, az);
-    float pitch = atan2f(ax, sqrtf(ay * ay + az * az));
+    float pitch = -atan2f(ax, sqrtf(ay * ay + az * az));
 
     /* Горизонтируем магнитное поле: m_lvl = Ry(pitch) * Rx(roll) * m */
     float sr = sinf(roll), cr = cosf(roll);
@@ -193,7 +195,10 @@ void madgwick_euler_nwu(const madgwick_t *f, float *roll_deg, float *pitch_deg, 
 {
     float q0 = f->q0, q1 = f->q1, q2 = f->q2, q3 = f->q3;
     float roll = atan2f(2.0f * (q0 * q1 + q2 * q3), 1.0f - 2.0f * (q1 * q1 + q2 * q2));
-    float sinp = 2.0f * (q0 * q2 - q3 * q1);
+    /* Тангаж: + при носу вверх. Стандартная NWU-формула 2(q0q2 - q1q3)
+     * рассчитана на авиационную систему (Y вправо, Z вниз); в нашей системе
+     * (Y влево, Z вверх) знак противоположен. */
+    float sinp = 2.0f * (q3 * q1 - q0 * q2);
     if (sinp > 1.0f) {
         sinp = 1.0f;
     } else if (sinp < -1.0f) {

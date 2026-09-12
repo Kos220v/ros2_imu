@@ -90,8 +90,8 @@ extern "C" {
 typedef struct {
     uint32_t ts_ms;
     float qw, qx, qy, qz; /* кватернион корпус->ENU (для sensor_msgs/Imu) */
-    float roll_deg;       /* крен, -180..180 */
-    float pitch_deg;      /* тангаж, -90..90 */
+    float roll_deg;       /* крен, -180..180 (+ левый край вверх) */
+    float pitch_deg;      /* тангаж, -90..90 (+ нос вверх) */
     float yaw_deg;        /* курс fused, -180..180, 0=север, + против часовой */
     float azimuth_deg;    /* азимут tilt-comp, 0..360, по часовой от севера, +склонение */
     float wx, wy, wz;     /* рад/с, со снятым дрейфом */

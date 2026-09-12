@@ -298,6 +298,45 @@ static void test_mag_mount(void)
     CHECK(fabsf(az - 90.0f) < 1.0f, "az=90 east (было 270 — W/E зеркало)");
 }
 
+/* ---------- 5c. Знаки крена/тангажа (тангаж + = нос вверх, крен + = левый край вверх) ----------
+ * Регрессия: «тангаж перевернут, нос вверх а в программе вниз». */
+static void test_pitch_roll_signs(void)
+{
+    const float g = 9.80665f;
+    madgwick_t f;
+    float roll, pitch, yaw;
+
+    /* Сид: нос вверх 30°: a = (+g·sin30, 0, g·cos30), m = (-4, 0, -67) */
+    madgwick_init(&f, 0.1f, 50.0f);
+    madgwick_init_from_accel_mag(&f, 0.5f * g, 0.0f, 0.866f * g, -4.0f, 0.0f, -67.0f);
+    madgwick_euler_nwu(&f, &roll, &pitch, &yaw);
+    CHECK(fabsf(pitch - 30.0f) < 1.0f, "seed nose-up 30 -> pitch +30 (был -30)");
+    CHECK(fabsf(roll) < 1.0f, "seed nose-up roll 0");
+
+    /* Сид: нос вниз 30°: a = (-g·sin30, 0, g·cos30), m = (56, 0, -37) */
+    madgwick_init(&f, 0.1f, 50.0f);
+    madgwick_init_from_accel_mag(&f, -0.5f * g, 0.0f, 0.866f * g, 56.0f, 0.0f, -37.0f);
+    madgwick_euler_nwu(&f, &roll, &pitch, &yaw);
+    CHECK(fabsf(pitch + 30.0f) < 1.0f, "seed nose-down 30 -> pitch -30");
+
+    /* Сид: левый край вверх 30°: a = (0, +g·sin30, g·cos30), m = (30, -30, -52) */
+    madgwick_init(&f, 0.1f, 50.0f);
+    madgwick_init_from_accel_mag(&f, 0.0f, 0.5f * g, 0.866f * g, 30.0f, -30.0f, -52.0f);
+    madgwick_euler_nwu(&f, &roll, &pitch, &yaw);
+    CHECK(fabsf(roll - 30.0f) < 1.0f, "seed left-up 30 -> roll +30 (правый = -)");
+    CHECK(fabsf(pitch) < 1.0f, "seed left-up pitch 0");
+
+    /* Фильтр: старт плоско, далее держать нос вверх -> pitch > 0 */
+    madgwick_init(&f, 0.1f, 50.0f);
+    madgwick_init_from_accel_mag(&f, 0.0f, 0.0f, g, 30.0f, 0.0f, -60.0f);
+    for (int i = 0; i < 2000; i++) {
+        madgwick_update_9(&f, 0, 0, 0, 0.5f * g, 0.0f, 0.866f * g, -4.0f, 0.0f, -67.0f);
+    }
+    madgwick_euler_nwu(&f, &roll, &pitch, &yaw);
+    CHECK(pitch > 25.0f, "filter nose-up -> pitch + (%.1f)", pitch);
+    CHECK(fabsf(yaw) < 5.0f, "filter nose-up yaw 0 (%.1f)", yaw);
+}
+
 /* ---------- 6. Fusion: сходимость ---------- */
 
 static void feed_north(imu_fusion_t *f, int n)
@@ -841,6 +880,7 @@ int main(void)
     test_madgwick_cardinal();
     test_tilt_comp();
     test_mag_mount();
+    test_pitch_roll_signs();
     test_fusion_converge();
     test_mag_calib();
     test_gyro_calib();
