@@ -1,5 +1,5 @@
 /* Лёгкий отладочный вывод в USART1: mini-printf.
- * Формат: %s %d %u %x %c %f (float — фикс. точка, 2 знака),
+ * Формат: %s %d %u %x %X %c %f %.Nf (float — фикс. точка, точность по %.Nf),
  * ширина/%0-дополнение: %02x, %5u и т.п. */
 #ifndef DEBUG_LOG_H
 #define DEBUG_LOG_H
@@ -12,7 +12,7 @@ extern "C" {
 
 void dbg_init(UART_HandleTypeDef *huart);
 void dbg_print(const char *s);
-void dbg_printf(const char *fmt, ...); /* %s %d %u %x %c, БЕЗ %f */
+void dbg_printf(const char *fmt, ...); /* %s %d %u %x %X %c %f %.Nf */
 
 #ifdef __cplusplus
 }

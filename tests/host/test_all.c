@@ -767,6 +767,10 @@ static void test_diag(void)
     CHECK(strstr(d, "CHIP_ID: 0xff") != NULL, "mag chip id");
     CHECK(strstr(d, "MPU data: a=") != NULL, "mpu first read");
     CHECK(strstr(d, "MAG data: (") != NULL, "mag first read");
+    /* Цифры должны печататься по-настоящему (регрессия: %.2f литералом) */
+    CHECK(strstr(d, "MPU data: a=(0.00 0.00 9.81)") != NULL, "mpu data values");
+    CHECK(strstr(d, "MAG data: (20.0 0.0 -45.0) uT") != NULL, "mag data values");
+    CHECK(strstr(d, "%.") == NULL, "no literal format specs");
 
     /* Периодический статус после 10 с */
     stub_tick_set(10000);

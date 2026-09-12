@@ -74,8 +74,9 @@ static void emit_uint(char *buf, size_t cap, size_t *pos, uint32_t v, int hex,
     }
 }
 
-/* Дробное: фиксированная десятичная точка, ровно 2 знака (%f). */
-static void emit_float(char *buf, size_t cap, size_t *pos, double d, int width)
+/* Дробное: фиксированная десятичная точка, точность по %.Nf (по умолч. 2). */
+static void emit_float(char *buf, size_t cap, size_t *pos, double d, int width,
+                       int prec)
 {
     char tmp[24];
     int len = 0;
@@ -84,11 +85,15 @@ static void emit_float(char *buf, size_t cap, size_t *pos, double d, int width)
         tmp[len++] = '-';
         f = -f;
     }
+    uint32_t scale = 1u;
+    for (int i = 0; i < prec && i < 4; i++) {
+        scale *= 10u;
+    }
     uint32_t ip = (uint32_t)f;
-    uint32_t fp = (uint32_t)((f - (float)ip) * 100.0f + 0.5f);
-    if (fp >= 100u) {
+    uint32_t fp = (uint32_t)((f - (float)ip) * (float)scale + 0.5f);
+    if (fp >= scale) {
         ip++;
-        fp -= 100u;
+        fp -= scale;
     }
     char num[12];
     int nlen = 0;
@@ -99,18 +104,22 @@ static void emit_float(char *buf, size_t cap, size_t *pos, double d, int width)
     for (int i = nlen - 1; i >= 0; i--) {
         tmp[len++] = num[i];
     }
-    tmp[len++] = '.';
-    tmp[len++] = (char)('0' + (fp / 10u) % 10u);
-    tmp[len++] = (char)('0' + (fp % 10u));
+    if (prec > 0) {
+        tmp[len++] = '.';
+        for (uint32_t i = scale / 10u; i > 0u; i /= 10u) {
+            tmp[len++] = (char)('0' + (fp / i) % 10u);
+        }
+    }
     for (int i = len; i < width && (int)*pos < (int)cap - 1; i++) {
         buf[(*pos)++] = ' ';
     }
-    while (len > 0 && *pos < cap) {
-        buf[(*pos)++] = tmp[--len];
+    /* tmp заполнён в прямом порядке: пишем в том же */
+    for (int i = 0; i < len && *pos < cap; i++) {
+        buf[(*pos)++] = tmp[i];
     }
 }
 
-/* Формат: %s %d %u %x %X %c %f; ширина и нули: %02x, %-подобного нет
+/* Формат: %s %d %u %x %X %c %f %.Nf; ширина и нули: %02x, %-подобного нет
  * (width без знака = пробелы, с '0' = нули). */
 void dbg_printf(const char *fmt, ...)
 {
@@ -140,6 +149,15 @@ void dbg_printf(const char *fmt, ...)
             width = width * 10 + (*p - '0');
             p++;
         }
+        int prec = -1;
+        if (*p == '.') {
+            p++;
+            prec = 0;
+            while (*p >= '0' && *p <= '9' && prec < 99) {
+                prec = prec * 10 + (*p - '0');
+                p++;
+            }
+        }
         switch (*p) {
         case 'd':
         case 'i':
@@ -156,7 +174,8 @@ void dbg_printf(const char *fmt, ...)
                       width, zero_pad);
             break;
         case 'f':
-            emit_float(buf, sizeof(buf) - 1, &pos, va_arg(ap, double), width);
+            emit_float(buf, sizeof(buf) - 1, &pos, va_arg(ap, double), width,
+                       prec < 0 ? 2 : prec);
             break;
         case 'c': {
             int c = va_arg(ap, int);
