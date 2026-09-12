@@ -26,6 +26,8 @@ CMD_SET_DECLINATION = 0x86
 CMD_SAVE_FLASH = 0x87
 CMD_GET_INFO = 0x88
 CMD_GET_CALIB = 0x89
+CMD_ACCEL_CALIB_START = 0x8A
+CMD_ACCEL_CALIB_STOP = 0x8B
 
 ACK_OK = 0
 ACK_ERR_ARG = 1
@@ -38,15 +40,17 @@ STATUS_MAG_OK = 1 << 1
 STATUS_MAG_CAL = 1 << 2
 STATUS_GYRO_CAL = 1 << 3
 STATUS_FUSED_9X = 1 << 4
+STATUS_ACCEL_CAL = 1 << 5
 
 CALIB_IDLE = 0
 CALIB_MAG_RUN = 1
 CALIB_GYRO_RUN = 2
+CALIB_ACCEL_RUN = 3
 
 ORIENTATION_STRUCT = struct.Struct('<I18f4B')
 INFO_STRUCT = struct.Struct('<BBBBI16sBBBBfBBBB')
 ACK_STRUCT = struct.Struct('<BBH')
-CALIB_STRUCT = struct.Struct('<BBBB9f')
+CALIB_STRUCT = struct.Struct('<BBBB15f')
 
 
 def crc16_ccitt(data: bytes) -> int:
@@ -207,6 +211,8 @@ class Calib:
     mag_hard: tuple
     mag_scale: tuple
     gyro_bias: tuple
+    accel_offset: tuple
+    accel_scale: tuple
 
     @classmethod
     def from_payload(cls, payload: bytes) -> 'Calib':
@@ -214,7 +220,9 @@ class Calib:
         return cls(state=f[0], progress_pct=f[1],
                    mag_hard=(f[4], f[5], f[6]),
                    mag_scale=(f[7], f[8], f[9]),
-                   gyro_bias=(f[10], f[11], f[12]))
+                   gyro_bias=(f[10], f[11], f[12]),
+                   accel_offset=(f[13], f[14], f[15]),
+                   accel_scale=(f[16], f[17], f[18]))
 
 
 # --- Построители команд ---
@@ -236,6 +244,14 @@ def cmd_mag_calib_stop(save: bool) -> bytes:
 
 def cmd_gyro_calib() -> bytes:
     return encode_frame(CMD_GYRO_CALIB)
+
+
+def cmd_accel_calib_start() -> bytes:
+    return encode_frame(CMD_ACCEL_CALIB_START)
+
+
+def cmd_accel_calib_stop(save: bool) -> bytes:
+    return encode_frame(CMD_ACCEL_CALIB_STOP, struct.pack('<B', 1 if save else 0))
 
 
 def cmd_zero_yaw(clear: bool = False) -> bytes:

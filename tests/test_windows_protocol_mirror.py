@@ -39,6 +39,8 @@ cmd_cases = [
     ("cmd_ping", ()), ("cmd_set_rate", (50,)), ("cmd_set_rate", (100,)),
     ("cmd_mag_calib_start", ()), ("cmd_mag_calib_stop", (True,)),
     ("cmd_mag_calib_stop", (False,)), ("cmd_gyro_calib", ()),
+    ("cmd_accel_calib_start", ()), ("cmd_accel_calib_stop", (True,)),
+    ("cmd_accel_calib_stop", (False,)),
     ("cmd_zero_yaw", ()), ("cmd_zero_yaw", (True,)),
     ("cmd_set_declination", (11.5,)), ("cmd_set_declination", (-5.25,)),
     ("cmd_save_flash", ()), ("cmd_get_info", ()), ("cmd_get_calib", ()),
@@ -64,6 +66,22 @@ for f in dataclasses.fields(o):
     ok(getattr(ow, f.name) == getattr(o_rt, f.name), f"поле {f.name}")
 ok(w.encode_frame(w.MSG_ORIENTATION, pr) == r.encode_frame(r.MSG_ORIENTATION, pr),
    "кадр ориентации байт-в-байт")
+
+# --- 3b. CALIB (64 байта, включая акселерометр) -----------------------------
+ok(w.CALIB_STRUCT.size == r.CALIB_STRUCT.size == 64, "CALIB = 64 байта")
+cpl = r.CALIB_STRUCT.pack(3, 67, 0, 0, 1.5, -2.5, 3.5, 0.9, 1.1, 1.0,
+                          0.01, -0.02, 0.005, 0.05, -0.1, 0.35,
+                          0.98, 1.01, 0.925)
+cw = w.Calib.from_payload(cpl)
+cr = r.Calib.from_payload(cpl)
+for f in dataclasses.fields(cr):
+    ok(getattr(cw, f.name) == getattr(cr, f.name), f"calib поле {f.name}")
+ok(all(abs(a - b) < 1e-6 for a, b in zip(cw.accel_offset, (0.05, -0.1, 0.35))),
+   "calib accel_offset")
+ok(all(abs(a - b) < 1e-6 for a, b in zip(cw.accel_scale, (0.98, 1.01, 0.925))),
+   "calib accel_scale")
+ok(w.CALIB_ACCEL_RUN == r.CALIB_ACCEL_RUN == 3, "CALIB_ACCEL_RUN")
+ok(w.STATUS_ACCEL_CAL == r.STATUS_ACCEL_CAL == 0x20, "STATUS_ACCEL_CAL")
 
 # --- 4. Декодер: шум, битые кадры, произвольная нарезка ---------------------
 f1 = w.encode_frame(0x01, pr)

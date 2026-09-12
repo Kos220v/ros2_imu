@@ -191,6 +191,12 @@ void imu_calib_msg_encode(const imu_calib_msg_t *m, uint8_t *out)
     imu_put_f32le(&out[28], m->gyro_bias_x);
     imu_put_f32le(&out[32], m->gyro_bias_y);
     imu_put_f32le(&out[36], m->gyro_bias_z);
+    imu_put_f32le(&out[40], m->accel_off_x);
+    imu_put_f32le(&out[44], m->accel_off_y);
+    imu_put_f32le(&out[48], m->accel_off_z);
+    imu_put_f32le(&out[52], m->accel_scale_x);
+    imu_put_f32le(&out[56], m->accel_scale_y);
+    imu_put_f32le(&out[60], m->accel_scale_z);
 }
 
 /* Состояния декодера. */

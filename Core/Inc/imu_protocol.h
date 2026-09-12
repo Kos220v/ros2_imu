@@ -12,7 +12,7 @@
  *   0x01 ORIENTATION (80 байт) - кватернион, углы, азимут, сырые данные
  *   0x02 INFO (36 байт)        - версия прошивки, статусы
  *   0x03 ACK (4 байта)         - ответ на команду
- *   0x04 CALIB (40 байт)       - калибровки и прогресс калибровки
+ *   0x04 CALIB (64 байта)      - калибровки и прогресс калибровки
  *
  * Команды робот -> STM32:
  *   0x80 PING            (0 байт) -> ACK
@@ -25,6 +25,8 @@
  *   0x87 SAVE_FLASH      (0 байт) -> ACK
  *   0x88 GET_INFO        (0 байт) -> INFO
  *   0x89 GET_CALIB       (0 байт) -> CALIB
+ *   0x8A ACCEL_CALIB_START (0 байт) -> ACK, далее поток CALIB с прогрессом
+ *   0x8B ACCEL_CALIB_STOP  (1 байт: 0=отменить, 1=применить и сохранить) -> ACK+CALIB
  *
  * Модуль платформо-независимый (без HAL): собирается и для STM32, и для хост-тестов.
  */
@@ -53,7 +55,7 @@ extern "C" {
 #define IMU_ORIENTATION_LEN 80u
 #define IMU_INFO_LEN 36u
 #define IMU_ACK_LEN 4u
-#define IMU_CALIB_LEN 40u
+#define IMU_CALIB_LEN 64u
 
 /* --- Команды робот -> STM32 --- */
 #define IMU_CMD_PING 0x80u
@@ -66,6 +68,8 @@ extern "C" {
 #define IMU_CMD_SAVE_FLASH 0x87u
 #define IMU_CMD_GET_INFO 0x88u
 #define IMU_CMD_GET_CALIB 0x89u
+#define IMU_CMD_ACCEL_CALIB_START 0x8Au
+#define IMU_CMD_ACCEL_CALIB_STOP 0x8Bu
 
 /* --- Коды результата в ACK --- */
 #define IMU_ACK_OK 0u
@@ -80,11 +84,13 @@ extern "C" {
 #define IMU_STATUS_MAG_CAL (1u << 2)
 #define IMU_STATUS_GYRO_CAL (1u << 3)
 #define IMU_STATUS_FUSED_9X (1u << 4) /* 1 = 9-осевой режим, 0 = 6-осевой (без мага) */
+#define IMU_STATUS_ACCEL_CAL (1u << 5)
 
 /* --- Состояния калибровки (calib_state) --- */
 #define IMU_CALIB_IDLE 0u
 #define IMU_CALIB_MAG_RUN 1u
 #define IMU_CALIB_GYRO_RUN 2u
+#define IMU_CALIB_ACCEL_RUN 3u
 
 /* Раскладка ORIENTATION (см. шапку файла). */
 typedef struct {
@@ -130,6 +136,8 @@ typedef struct {
     float mag_hard_x, mag_hard_y, mag_hard_z;   /* hard-iron, мкТл */
     float mag_scale_x, mag_scale_y, mag_scale_z; /* soft-iron, безразм. */
     float gyro_bias_x, gyro_bias_y, gyro_bias_z; /* рад/с */
+    float accel_off_x, accel_off_y, accel_off_z; /* смещение, м/с^2 */
+    float accel_scale_x, accel_scale_y, accel_scale_z; /* безразм. (1/gain) */
 } imu_calib_msg_t;
 
 /* CRC16-CCITT (poly 0x1021, init 0xFFFF). Проверка: "123456789" -> 0x29B1. */

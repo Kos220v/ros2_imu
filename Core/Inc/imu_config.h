@@ -57,6 +57,7 @@ extern "C" {
 /* ---------- Калибровки ---------- */
 #define IMU_GYRO_CALIB_SAMPLES 100u /* при 50 Гц ~= 2 c неподвижности */
 #define IMU_MAG_CALIB_SAMPLES 1500u /* при 50 Гц ~= 30 c вращений */
+#define IMU_ACCEL_CALIB_SAMPLES 1500u /* при 50 Гц ~= 30 c: 6 граней по ~5 c */
 #define IMU_MAG_FIELD_MIN_UT 10.0f  /* правдоподобное поле Земли, мкТл */
 #define IMU_MAG_FIELD_MAX_UT 120.0f
 

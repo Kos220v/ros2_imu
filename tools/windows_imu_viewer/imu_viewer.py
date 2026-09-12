@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 import queue
+import struct
 import threading
 import time
 from collections import deque
@@ -157,6 +158,8 @@ CMD_NAMES = {
     proto.CMD_MAG_CALIB_START: "Калибровка маг.: старт",
     proto.CMD_MAG_CALIB_STOP: "Калибровка маг.: стоп",
     proto.CMD_GYRO_CALIB: "Калибровка гиро",
+    proto.CMD_ACCEL_CALIB_START: "Калибровка аксел.: старт",
+    proto.CMD_ACCEL_CALIB_STOP: "Калибровка аксел.: стоп",
     proto.CMD_ZERO_YAW: "Ноль азимута",
     proto.CMD_SET_DECLINATION: "Склонение",
     proto.CMD_SAVE_FLASH: "Сохранение во flash",
@@ -166,7 +169,8 @@ CMD_NAMES = {
 ACK_NAMES = {0: "OK", 1: "ошибка аргумента", 2: "ошибка состояния",
              3: "ошибка железа", 4: "неизвестная команда"}
 CALIB_STATE_NAMES = {0: "ожидание", 1: "идёт калибровка магнитометра",
-                     2: "идёт калибровка гироскопа"}
+                     2: "идёт калибровка гироскопа",
+                     3: "идёт калибровка акселерометра"}
 
 SKY = "#79b8e6"
 GROUND = "#8a6b42"
@@ -293,6 +297,12 @@ class ImuViewer:
              "Калибровка маг.: старт"),
             ("Калибровка маг: сохранить", proto.cmd_mag_calib_stop(True),
              "Калибровка маг.: стоп+сохранить"),
+            ("Калибровка аксел.: старт", proto.cmd_accel_calib_start(),
+             "Калибровка аксел.: старт"),
+            ("Калибровка аксел.: сохранить", proto.cmd_accel_calib_stop(True),
+             "Калибровка аксел.: стоп+сохранить"),
+            ("Калибровка аксел.: отмена", proto.cmd_accel_calib_stop(False),
+             "Калибровка аксел.: отмена"),
             ("Сохранить во flash", proto.cmd_save_flash(), "Сохранение во flash"),
             ("Запрос инфо", proto.cmd_get_info(), "Запрос инфо"),
             ("Запрос калибровки", proto.cmd_get_calib(), "Запрос калибровки"),
@@ -305,9 +315,9 @@ class ImuViewer:
         for c in range(3):
             cmd.columnconfigure(c, weight=1)
         self.pbar = ttk.Progressbar(cmd, maximum=100, length=300)
-        self.pbar.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.pbar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         self.v_calib = tk.Label(cmd, text="", fg="#444")
-        self.v_calib.grid(row=4, column=0, columnspan=3)
+        self.v_calib.grid(row=5, column=0, columnspan=3)
 
         self.log = tk.Text(right, height=5, width=46, state="disabled",
                            font=("Consolas", 9))
@@ -504,6 +514,11 @@ class ImuViewer:
         text = CALIB_STATE_NAMES.get(cal.state, f"состояние {cal.state}")
         if cal.state:
             text += f" · {cal.progress_pct}%"
+        else:
+            text += (f" · аксел off=({cal.accel_offset[0]:+.2f} "
+                     f"{cal.accel_offset[1]:+.2f} {cal.accel_offset[2]:+.2f}) "
+                     f"scale=({cal.accel_scale[0]:.3f} "
+                     f"{cal.accel_scale[1]:.3f} {cal.accel_scale[2]:.3f})")
         self.v_calib.config(text=text)
         self._log(f"Калибровка: {text}")
 
@@ -557,7 +572,11 @@ class ImuViewer:
                 elif msg_id == proto.MSG_INFO:
                     self._apply_info(proto.Info.from_payload(payload))
                 elif msg_id == proto.MSG_CALIB:
-                    self._apply_calib(proto.Calib.from_payload(payload))
+                    try:
+                        self._apply_calib(proto.Calib.from_payload(payload))
+                    except struct.error:
+                        self._log("CALIB: несовместимый формат "
+                                  "(обновите прошивку или viewer)")
                 elif msg_id == proto.MSG_ACK:
                     a = proto.Ack.from_payload(payload)
                     name = CMD_NAMES.get(a.cmd_id, f"0x{a.cmd_id:02X}")

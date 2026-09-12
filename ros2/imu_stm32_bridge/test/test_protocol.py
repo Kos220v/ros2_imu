@@ -69,10 +69,17 @@ def test_ack_info_calib_structs():
         P.INFO_STRUCT.pack(0, 1, 0, 0, 999, b'STM32F303-IMU\x00\x00\x00\x00',
                            1, 1, 1, 1, 11.5, 50, 0, 0, 0))
     assert (info.fw_minor, info.board, info.rate_hz) == (1, 'STM32F303-IMU', 50)
-    cal = P.Calib.from_payload(P.CALIB_STRUCT.pack(1, 42, 0, 0, 1, 2, 3, 1, 1, 1,
-                                                   0.01, -0.02, 0.0))
+    cal = P.Calib.from_payload(P.CALIB_STRUCT.pack(
+        1, 42, 0, 0, 1, 2, 3, 1, 1, 1, 0.01, -0.02, 0.0,
+        0.05, -0.1, 0.35, 0.98, 1.01, 0.925))
     assert (cal.state, cal.progress_pct) == (1, 42)
     assert cal.mag_hard == (1.0, 2.0, 3.0)
+    for got, want in ((cal.gyro_bias, (0.01, -0.02, 0.0)),
+                      (cal.accel_offset, (0.05, -0.1, 0.35)),
+                      (cal.accel_scale, (0.98, 1.01, 0.925))):
+        assert all(abs(g - wv) <= 1e-6 for g, wv in zip(got, want)), \
+            (got, want)
+    assert P.CALIB_STRUCT.size == 64
 
 
 def test_command_builders():
@@ -80,6 +87,9 @@ def test_command_builders():
     assert dec.feed(P.cmd_set_rate(100))[0] == (P.CMD_SET_RATE, b'\x64')
     assert dec.feed(P.cmd_ping())[0] == (P.CMD_PING, b'')
     assert dec.feed(P.cmd_mag_calib_stop(True))[0][1] == b'\x01'
+    assert dec.feed(P.cmd_accel_calib_start())[0] == (P.CMD_ACCEL_CALIB_START, b'')
+    assert dec.feed(P.cmd_accel_calib_stop(True))[0][1] == b'\x01'
+    assert dec.feed(P.cmd_accel_calib_stop(False))[0][1] == b'\x00'
     assert dec.feed(P.cmd_zero_yaw())[0][1] == b'\x00'
     assert struct.unpack('<f', dec.feed(P.cmd_set_declination(11.5))[0][1])[0] == 11.5
 

@@ -47,7 +47,13 @@ void imu_calib_defaults(imu_calib_t *c)
     c->rate_hz = IMU_DEFAULT_RATE_HZ;
     c->mag_calibrated = 0;
     c->gyro_calibrated = 0;
-    c->reserved = 0;
+    c->accel_calibrated = 0;
+    c->accel_offset[0] = 0.0f;
+    c->accel_offset[1] = 0.0f;
+    c->accel_offset[2] = 0.0f;
+    c->accel_scale[0] = 1.0f;
+    c->accel_scale[1] = 1.0f;
+    c->accel_scale[2] = 1.0f;
 }
 
 void imu_fusion_init(imu_fusion_t *f, const imu_calib_t *calib)
@@ -141,6 +147,11 @@ void imu_fusion_update(imu_fusion_t *f, const imu_sample_t *s, imu_result_t *r)
     mx = (mx - f->calib.mag_hard[0]) * f->calib.mag_scale[0];
     my = (my - f->calib.mag_hard[1]) * f->calib.mag_scale[1];
     mz = (mz - f->calib.mag_hard[2]) * f->calib.mag_scale[2];
+    /* Акселерометр: raw = gain·a + offset  =>  a = (raw - offset)·(1/gain).
+     * accel_scale хранит 1/gain = g / полуразмах (см. imu_accel_calib_finish). */
+    ax = (ax - f->calib.accel_offset[0]) * f->calib.accel_scale[0];
+    ay = (ay - f->calib.accel_offset[1]) * f->calib.accel_scale[1];
+    az = (az - f->calib.accel_offset[2]) * f->calib.accel_scale[2];
 
     /* 3. Проверка правдоподобности мага (защита от железа рядом). */
     bool mag_ok = s->mag_valid;
@@ -293,6 +304,82 @@ bool imu_gyro_calib_feed(imu_fusion_t *f, float gx, float gy, float gz)
         return true;
     }
     return false;
+}
+
+/* ---------- Калибровка акселерометра ----------
+ * Метод 6 граней: во время сбора плату поочерёдно кладут каждой из 6 граней
+ * вверх (по ~5 с на грань). Тогда каждая ось принимает значения ±g·gain,
+ * и по min/max восстанавливаются offset и gain для всех осей:
+ *   offset[i] = (max + min) / 2
+ *   scale[i]  = g / ((max - min) / 2)     (1/gain)
+ * Проверка качества: полуразмах каждой оси должен быть близок к g
+ * (если плату не перевернули — размах мал, калибровка не применяется).
+ */
+
+void imu_accel_calib_start(imu_fusion_t *f, uint32_t target_samples)
+{
+    f->accel_cal.active = 1;
+    f->accel_cal.count = 0;
+    f->accel_cal.target = (target_samples > 0) ? target_samples : 1u;
+    for (int i = 0; i < 3; i++) {
+        f->accel_cal.min[i] = 1e9f;
+        f->accel_cal.max[i] = -1e9f;
+    }
+}
+
+bool imu_accel_calib_feed(imu_fusion_t *f, float ax, float ay, float az)
+{
+    if (!f->accel_cal.active) {
+        return false;
+    }
+    const float v[3] = {ax, ay, az};
+    for (int i = 0; i < 3; i++) {
+        if (v[i] < f->accel_cal.min[i]) {
+            f->accel_cal.min[i] = v[i];
+        }
+        if (v[i] > f->accel_cal.max[i]) {
+            f->accel_cal.max[i] = v[i];
+        }
+    }
+    f->accel_cal.count++;
+    if (f->accel_cal.count >= f->accel_cal.target) {
+        f->accel_cal.active = 0; /* сбор окончен, ждём решения применить/отменить */
+        return true;
+    }
+    return false;
+}
+
+void imu_accel_calib_finish(imu_fusion_t *f, bool apply)
+{
+    f->accel_cal.active = 0;
+    if (!apply || f->accel_cal.count == 0) {
+        return;
+    }
+    const float g = 9.80665f;
+    float center[3], half[3];
+    for (int i = 0; i < 3; i++) {
+        center[i] = 0.5f * (f->accel_cal.max[i] + f->accel_cal.min[i]);
+        half[i] = 0.5f * (f->accel_cal.max[i] - f->accel_cal.min[i]);
+        /* Осью должно было качнуть во все стороны: полуразмах ~ g.
+         * Меньше 0.8·g — грань не довернули; больше 1.75·g — тряска/вибрация. */
+        if (half[i] < 0.8f * g || half[i] > 1.75f * g) {
+            return;
+        }
+    }
+    for (int i = 0; i < 3; i++) {
+        f->calib.accel_offset[i] = center[i];
+        f->calib.accel_scale[i] = g / half[i];
+    }
+    f->calib.accel_calibrated = 1;
+}
+
+uint8_t imu_accel_calib_progress(const imu_fusion_t *f)
+{
+    if (f->accel_cal.target == 0) {
+        return 0;
+    }
+    uint32_t p = (f->accel_cal.count * 100u) / f->accel_cal.target;
+    return (p > 100u) ? 100u : (uint8_t)p;
 }
 
 /* ---------- ZERO_YAW ---------- */

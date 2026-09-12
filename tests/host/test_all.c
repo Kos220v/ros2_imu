@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "imu_app.h"
+#include "imu_config.h"
 #include "imu_flash.h"
 #include "imu_fusion.h"
 #include "imu_protocol.h"
@@ -337,6 +338,65 @@ static void test_pitch_roll_signs(void)
     CHECK(fabsf(yaw) < 5.0f, "filter nose-up yaw 0 (%.1f)", yaw);
 }
 
+/* ---------- 5e. Калибровка акселерометра (6 граней) ----------
+ * Симулируем клон: raw = gain·a + off (gain Z = 1.08, как MP92 163LA1). */
+static void test_accel_calib(void)
+{
+    stub_reset();
+    const float g = 9.80665f;
+    const float gain[3] = {1.02f, 0.99f, 1.08f};
+    const float off[3]  = {0.10f, -0.15f, 0.35f};
+
+    imu_calib_t cal;
+    imu_calib_defaults(&cal);
+    imu_fusion_t f;
+    imu_fusion_init(&f, &cal);
+
+    imu_accel_calib_start(&f, 600u);
+    const float faces[6][3] = {
+        {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+    };
+    for (int face = 0; face < 6; face++) {
+        for (int i = 0; i < 100; i++) {
+            float ax = gain[0] * faces[face][0] * g + off[0];
+            float ay = gain[1] * faces[face][1] * g + off[1];
+            float az = gain[2] * faces[face][2] * g + off[2];
+            if (imu_accel_calib_feed(&f, ax, ay, az)) {
+                break;
+            }
+        }
+    }
+    imu_accel_calib_finish(&f, true);
+    CHECK(f.calib.accel_calibrated == 1, "6 граней -> применено");
+    for (int i = 0; i < 3; i++) {
+        CHECK_CLOSE(f.calib.accel_offset[i], off[i], 0.01f, "offset[%d]", i);
+        CHECK_CLOSE(f.calib.accel_scale[i], 1.0f / gain[i], 0.005f,
+                    "scale[%d]", i);
+    }
+
+    /* Применение в пайплайне: плоско, raw Z = gain·g + off -> на выходе g */
+    imu_sample_t s = {0.0f, 0.0f, gain[2] * g + off[2], 0, 0, 0,
+                      20.0f, 0.0f, -45.0f, true, 25.0f};
+    imu_result_t r;
+    imu_fusion_update(&f, &s, &r);
+    CHECK_CLOSE(r.az, g, 0.01f, "az после кал = g");
+
+    /* Отрицательный случай: только плоская грань -> размах мал, не применить */
+    imu_calib_t cal2;
+    imu_calib_defaults(&cal2);
+    imu_fusion_t f2;
+    imu_fusion_init(&f2, &cal2);
+    imu_accel_calib_start(&f2, 200u);
+    for (int i = 0; i < 200; i++) {
+        if (imu_accel_calib_feed(&f2, off[0], off[1], gain[2] * g + off[2])) {
+            break;
+        }
+    }
+    imu_accel_calib_finish(&f2, true);
+    CHECK(f2.calib.accel_calibrated == 0, "неполная сборка -> не применено");
+    CHECK_CLOSE(f2.calib.accel_scale[2], 1.0f, 1e-6f, "scale не тронут");
+}
+
 /* ---------- 6. Fusion: сходимость ---------- */
 
 static void feed_north(imu_fusion_t *f, int n)
@@ -597,6 +657,55 @@ static void test_flash(void)
     CHECK(!imu_flash_load(&c2), "corrupt detected");
 }
 
+/* ---------- 11b. Миграция flash v1 (52 байта, без акселерометра) -> v2 ---------- */
+static void test_flash_migration(void)
+{
+    stub_reset();
+    uint8_t *page = hal_stub_flash_page();
+    memset(page, 0xFF, 2048);
+
+    /* Собираем v1-запись руками: magic, version=1, len=52, calib v1, crc */
+    *(uint32_t *)(page + 0) = IMU_FLASH_MAGIC;
+    page[4] = 1;  /* version v1 */
+    page[5] = 0;
+    imu_put_u16le(page + 6, 52u);
+    const float gyro_bias[3] = {0.01f, 0.02f, 0.03f};
+    const float mag_hard[3] = {-3.5f, 4.25f, -0.75f};
+    const float mag_scale[3] = {0.95f, 1.05f, 1.0f};
+    const float decl = 2.5f, yaw_off = 12.0f, az_off = 350.0f;
+    memcpy(page + 8, gyro_bias, 12);
+    memcpy(page + 8 + 12, mag_hard, 12);
+    memcpy(page + 8 + 24, mag_scale, 12);
+    memcpy(page + 8 + 36, &decl, 4);
+    memcpy(page + 8 + 40, &yaw_off, 4);
+    memcpy(page + 8 + 44, &az_off, 4);
+    page[8 + 48] = 50u; /* rate_hz */
+    page[8 + 49] = 1u;  /* mag_calibrated */
+    page[8 + 50] = 1u;  /* gyro_calibrated */
+    page[8 + 51] = 0u;  /* reserved */
+    imu_put_u16le(page + 8 + 52, imu_crc16_ccitt(page + 8, 52));
+
+    imu_calib_t c;
+    CHECK(imu_flash_load(&c), "v1 запись загружена");
+    CHECK_CLOSE(c.gyro_bias[0], 0.01f, 1e-6f, "гироскоп");
+    CHECK_CLOSE(c.mag_hard[1], 4.25f, 1e-6f, "маг hard");
+    CHECK_CLOSE(c.mag_scale[2], 1.0f, 1e-6f, "маг scale");
+    CHECK_CLOSE(c.declination_deg, 2.5f, 1e-6f, "склонение");
+    CHECK_CLOSE(c.azimuth_offset_deg, 350.0f, 1e-6f, "az offset");
+    CHECK(c.rate_hz == 50, "rate");
+    CHECK(c.mag_calibrated == 1 && c.gyro_calibrated == 1, "флаги");
+    CHECK(c.accel_calibrated == 0, "аксел по дефолтам");
+    CHECK_CLOSE(c.accel_scale[0], 1.0f, 1e-6f, "acc scale x");
+    CHECK_CLOSE(c.accel_scale[1], 1.0f, 1e-6f, "acc scale y");
+    CHECK_CLOSE(c.accel_scale[2], 1.0f, 1e-6f, "acc scale z");
+
+    /* Дальше живёт как v2: save/load roundtrip */
+    CHECK(imu_flash_save(&c), "v2 save после миграции");
+    imu_calib_t c2;
+    CHECK(imu_flash_load(&c2), "v2 load");
+    CHECK(memcmp(&c, &c2, sizeof(c)) == 0, "v2 roundtrip");
+}
+
 /* ---------- 12. Интеграция: полный цикл приложения ---------- */
 
 static int tx_find(uint8_t want_id, uint8_t *payload_out, uint8_t *len_out, int occurrence)
@@ -769,6 +878,53 @@ static void test_app_loop(void)
     }
     CHECK(ImuApp_GetFusion()->calib.gyro_calibrated, "app gyro calibrated");
 
+    /* ACCEL_CALIB: 6 граней по ±10.6 м/с^2 (клон: gain Z ~ 1.08).
+     * raw = 10.6 / 9.80665 * 8192 ≈ 8855 LSB (±4 g: 8192 LSB/g). */
+    send_cmd(IMU_CMD_ACCEL_CALIB_START, NULL, 0);
+    CHECK(tx_find(IMU_MSG_ACK, ackp, NULL, 0), "accel start ack");
+    imu_ack_decode(ackp, IMU_ACK_LEN, &ack);
+    CHECK(ack.result == IMU_ACK_OK, "accel start ok");
+    const int16_t a_face[6][3] = {
+        {8855, 0, 0}, {-8855, 0, 0}, {0, 8855, 0},
+        {0, -8855, 0}, {0, 0, 8855}, {0, 0, -8855}
+    };
+    for (int i = 0; i < 1500; i++) {
+        const int face = (i / 250) % 6;
+        stub_mpu_set_raw(a_face[face][0], a_face[face][1], a_face[face][2],
+                         23, 0, 0, 0);
+        stub_tick_advance(20);
+        ImuApp_Process();
+        if (i % 300 == 299) {
+            stub_uart_tx_clear();
+        }
+    }
+    CHECK(!ImuApp_GetFusion()->accel_cal.active, "accel collection done");
+    uint8_t asave = 1;
+    send_cmd(IMU_CMD_ACCEL_CALIB_STOP, &asave, 1);
+    CHECK(tx_find(IMU_MSG_ACK, ackp, NULL, 0), "accel stop ack");
+    imu_ack_decode(ackp, IMU_ACK_LEN, &ack);
+    CHECK(ack.result == IMU_ACK_OK, "accel stop ok");
+    CHECK(ImuApp_GetFusion()->calib.accel_calibrated, "app accel calibrated");
+    CHECK_CLOSE(ImuApp_GetFusion()->calib.accel_scale[0],
+                9.80665f / 10.6f, 0.01f, "app accel scale");
+    imu_calib_t fc2;
+    CHECK(imu_flash_load(&fc2) && fc2.accel_calibrated, "accel calib in flash");
+    /* CALIB-сообщение: длина 64, scale в смещениях 52..63 */
+    uint8_t calp[IMU_CALIB_LEN];
+    CHECK(tx_find(IMU_MSG_CALIB, calp, NULL, 0), "accel calib msg");
+    CHECK_CLOSE(imu_get_f32le(calp + 52), 9.80665f / 10.6f, 0.01f,
+                "calib msg scale x");
+    uint8_t acancel = 0;
+    send_cmd(IMU_CMD_ACCEL_CALIB_START, NULL, 0);
+    for (int i = 0; i < 10; i++) {
+        stub_tick_advance(20);
+        ImuApp_Process();
+    }
+    send_cmd(IMU_CMD_ACCEL_CALIB_STOP, &acancel, 1);
+    CHECK(tx_find(IMU_MSG_ACK, ackp, NULL, 0), "accel cancel ack");
+    imu_ack_decode(ackp, IMU_ACK_LEN, &ack);
+    CHECK(ack.result == IMU_ACK_OK, "accel cancel ok");
+
     /* SET_DECLINATION */
     uint8_t dp[4] = {0x00u, 0x00u, 0xA0u, 0x40u}; /* 5.0f LE */
     send_cmd(IMU_CMD_SET_DECLINATION, dp, 4);
@@ -881,6 +1037,7 @@ int main(void)
     test_tilt_comp();
     test_mag_mount();
     test_pitch_roll_signs();
+    test_accel_calib();
     test_fusion_converge();
     test_mag_calib();
     test_gyro_calib();
@@ -890,6 +1047,7 @@ int main(void)
     test_mag_hmc();
     test_diag();
     test_flash();
+    test_flash_migration();
     test_app_loop();
 
     printf("checks: %d, failures: %d\n", s_checks, s_failures);

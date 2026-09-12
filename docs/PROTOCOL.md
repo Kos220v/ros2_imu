@@ -30,8 +30,8 @@
 | 48 | f32×3 | ax,ay,az | ускорения, м/с² |
 | 60 | f32×3 | mx,my,mz | магнитное поле, мкТл, калиброванное |
 | 72 | f32 | temp_c | температура MPU6050, °C |
-| 76 | u8 | status | биты: 0=MPU_OK, 1=MAG_OK, 2=MAG_CAL, 3=GYRO_CAL, 4=FUSED_9X |
-| 77 | u8 | calib_state | 0=idle, 1=калибровка мага, 2=калибровка гиро |
+| 76 | u8 | status | биты: 0=MPU_OK, 1=MAG_OK, 2=MAG_CAL, 3=GYRO_CAL, 4=FUSED_9X, 5=ACCEL_CAL |
+| 77 | u8 | calib_state | 0=idle, 1=калибровка мага, 2=калибровка гиро, 3=калибровка акселерометра |
 | 78 | u8 | rate_hz | текущая частота |
 | 79 | u8 | reserved | 0 |
 
@@ -47,10 +47,11 @@
 Коды: 0=OK, 1=неверный аргумент, 2=недопустимо сейчас, 3=ошибка железа,
 4=неизвестная команда.
 
-### 0x04 CALIB (40 байт, прогресс и данные калибровки)
+### 0x04 CALIB (64 байта, прогресс и данные калибровки)
 
 `state (u8)`, `progress_pct (u8)`, `res[2]`, `mag_hard[3] (f32, мкТл)`,
-`mag_scale[3] (f32)`, `gyro_bias[3] (f32, рад/с)`.
+`mag_scale[3] (f32)`, `gyro_bias[3] (f32, рад/с)`,
+`accel_off[3] (f32, м/с²)`, `accel_scale[3] (f32, = g/полуразмах, 1/gain)`.
 
 ## Команды робот -> STM32
 
@@ -66,6 +67,8 @@
 | 0x87 | SAVE_FLASH | — | ACK |
 | 0x88 | GET_INFO | — | INFO |
 | 0x89 | GET_CALIB | — | CALIB |
+| 0x8A | ACCEL_CALIB_START | — | ACK, далее поток CALIB |
+| 0x8B | ACCEL_CALIB_STOP | u8: 0=отменить, 1=применить+сохранить | ACK + CALIB |
 
 ## Пример (Python)
 

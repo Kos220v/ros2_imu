@@ -97,6 +97,9 @@ static uint8_t imu_calib_state(void)
     if (s_fusion.gyro_cal.active) {
         return IMU_CALIB_GYRO_RUN;
     }
+    if (s_fusion.accel_cal.active) {
+        return IMU_CALIB_ACCEL_RUN;
+    }
     return IMU_CALIB_IDLE;
 }
 
@@ -104,11 +107,16 @@ static void imu_send_calib(void)
 {
     imu_calib_msg_t m;
     m.state = imu_calib_state();
-    m.progress_pct = s_fusion.mag_cal.active ? imu_mag_calib_progress(&s_fusion)
-                       : s_fusion.gyro_cal.active
-                           ? (uint8_t)((s_fusion.gyro_cal.count * 100u) /
-                                       (s_fusion.gyro_cal.target ? s_fusion.gyro_cal.target : 1u))
-                           : 100u;
+    if (s_fusion.mag_cal.active) {
+        m.progress_pct = imu_mag_calib_progress(&s_fusion);
+    } else if (s_fusion.accel_cal.active) {
+        m.progress_pct = imu_accel_calib_progress(&s_fusion);
+    } else if (s_fusion.gyro_cal.active) {
+        m.progress_pct = (uint8_t)((s_fusion.gyro_cal.count * 100u) /
+                                   (s_fusion.gyro_cal.target ? s_fusion.gyro_cal.target : 1u));
+    } else {
+        m.progress_pct = 100u;
+    }
     m.reserved[0] = 0;
     m.reserved[1] = 0;
     m.mag_hard_x = s_fusion.calib.mag_hard[0];
@@ -120,6 +128,12 @@ static void imu_send_calib(void)
     m.gyro_bias_x = s_fusion.calib.gyro_bias[0];
     m.gyro_bias_y = s_fusion.calib.gyro_bias[1];
     m.gyro_bias_z = s_fusion.calib.gyro_bias[2];
+    m.accel_off_x = s_fusion.calib.accel_offset[0];
+    m.accel_off_y = s_fusion.calib.accel_offset[1];
+    m.accel_off_z = s_fusion.calib.accel_offset[2];
+    m.accel_scale_x = s_fusion.calib.accel_scale[0];
+    m.accel_scale_y = s_fusion.calib.accel_scale[1];
+    m.accel_scale_z = s_fusion.calib.accel_scale[2];
     uint8_t p[IMU_CALIB_LEN];
     imu_calib_msg_encode(&m, p);
     imu_send(IMU_MSG_CALIB, p, IMU_CALIB_LEN);
@@ -173,7 +187,7 @@ static void imu_handle_cmd(uint8_t id, const uint8_t *p, uint8_t len)
         }
         break;
     case IMU_CMD_MAG_CALIB_START:
-        if (s_fusion.gyro_cal.active) {
+        if (s_fusion.gyro_cal.active || s_fusion.accel_cal.active) {
             imu_send_ack(id, IMU_ACK_ERR_STATE, 0);
         } else {
             imu_mag_calib_start(&s_fusion, IMU_MAG_CALIB_SAMPLES);
@@ -200,11 +214,38 @@ static void imu_handle_cmd(uint8_t id, const uint8_t *p, uint8_t len)
         }
         break;
     case IMU_CMD_GYRO_CALIB:
-        if (s_fusion.mag_cal.active) {
+        if (s_fusion.mag_cal.active || s_fusion.accel_cal.active) {
             imu_send_ack(id, IMU_ACK_ERR_STATE, 0);
         } else {
             imu_gyro_calib_start(&s_fusion, IMU_GYRO_CALIB_SAMPLES);
             imu_send_ack(id, IMU_ACK_OK, 0);
+        }
+        break;
+    case IMU_CMD_ACCEL_CALIB_START:
+        if (s_fusion.gyro_cal.active || s_fusion.mag_cal.active) {
+            imu_send_ack(id, IMU_ACK_ERR_STATE, 0);
+        } else {
+            imu_accel_calib_start(&s_fusion, IMU_ACCEL_CALIB_SAMPLES);
+            s_last_progress_sent = 0;
+            imu_send_ack(id, IMU_ACK_OK, 0);
+        }
+        break;
+    case IMU_CMD_ACCEL_CALIB_STOP:
+        if (len != 1 || (p[0] != 0 && p[0] != 1)) {
+            imu_send_ack(id, IMU_ACK_ERR_ARG, 0);
+        } else if (s_fusion.accel_cal.count == 0 && !s_fusion.accel_cal.active) {
+            imu_send_ack(id, IMU_ACK_ERR_STATE, 0);
+        } else {
+            bool apply = (p[0] == 1);
+            imu_accel_calib_finish(&s_fusion, apply);
+            uint8_t res = IMU_ACK_OK;
+            if (apply) {
+                if (!imu_flash_save(&s_fusion.calib)) {
+                    res = IMU_ACK_ERR_HW;
+                }
+            }
+            imu_send_ack(id, res, 0);
+            imu_send_calib();
         }
         break;
     case IMU_CMD_ZERO_YAW: {
@@ -548,7 +589,8 @@ static void imu_stream(const imu_result_t *r, uint32_t now)
                          (s_mag_ok ? IMU_STATUS_MAG_OK : 0) |
                          (s_fusion.calib.mag_calibrated ? IMU_STATUS_MAG_CAL : 0) |
                          (s_fusion.calib.gyro_calibrated ? IMU_STATUS_GYRO_CAL : 0) |
-                         (r->fused_9x ? IMU_STATUS_FUSED_9X : 0));
+                         (r->fused_9x ? IMU_STATUS_FUSED_9X : 0) |
+                         (s_fusion.calib.accel_calibrated ? IMU_STATUS_ACCEL_CAL : 0));
     m.calib_state = imu_calib_state();
     m.rate_hz = s_fusion.calib.rate_hz;
     m.reserved = 0;
@@ -617,6 +659,20 @@ void ImuApp_Process(void)
             imu_send_calib();
         } else {
             uint8_t pr = imu_mag_calib_progress(&s_fusion);
+            if ((uint8_t)(pr - s_last_progress_sent) >= 5u) {
+                s_last_progress_sent = pr;
+                imu_send_calib();
+            }
+        }
+    }
+    if (s_fusion.accel_cal.active) {
+        float ax = sample.ax, ay = sample.ay, az = sample.az;
+        imu_apply_mount(&ax, &ay, &az);
+        if (imu_accel_calib_feed(&s_fusion, ax, ay, az)) {
+            dbg_print("ACCEL: collection done, send STOP to apply\r\n");
+            imu_send_calib();
+        } else {
+            uint8_t pr = imu_accel_calib_progress(&s_fusion);
             if ((uint8_t)(pr - s_last_progress_sent) >= 5u) {
                 s_last_progress_sent = pr;
                 imu_send_calib();

@@ -6,7 +6,8 @@
 #include "imu_protocol.h"
 #include "stm32f3xx_hal.h"
 
-#define IMU_FLASH_VERSION 1u
+#define IMU_FLASH_VERSION 2u
+#define IMU_FLASH_VERSION_OLD 1u
 
 /* Раскладка записи во flash (36 байт). */
 typedef struct {
@@ -17,6 +18,22 @@ typedef struct {
     imu_calib_t calib;
     uint16_t crc;
 } imu_flash_record_t;
+
+/* Старая раскладка imu_calib_t (v1, 52 байта, без акселерометра) —
+ * для миграции записей из прошивок до v2. */
+typedef struct {
+    float gyro_bias[3];
+    float mag_hard[3];
+    float mag_scale[3];
+    float declination_deg;
+    float yaw_offset_deg;
+    float azimuth_offset_deg;
+    uint8_t rate_hz;
+    uint8_t mag_calibrated;
+    uint8_t gyro_calibrated;
+    uint8_t reserved;
+} imu_calib_v1_t;
+_Static_assert(sizeof(imu_calib_v1_t) == 52u, "v1 calib layout is 52 bytes");
 
 static uint8_t *imu_flash_page(void)
 {
@@ -39,9 +56,45 @@ bool imu_flash_load(imu_calib_t *calib)
     if (rec->magic != IMU_FLASH_MAGIC) {
         return false;
     }
-    if (rec->version != IMU_FLASH_VERSION) {
+    if (rec->version != IMU_FLASH_VERSION &&
+        rec->version != IMU_FLASH_VERSION_OLD) {
         return false;
     }
+
+    if (rec->version == IMU_FLASH_VERSION_OLD) {
+        /* Миграция v1 (52 байта): магам/гироскоп сохраняем, акселерометр
+         * по дефолтам. CRC в старой записи идёт сразу после 52 байт
+         * калибровки (rec->crc в новой структуре уже на другом месте). */
+        if (rec->len != sizeof(imu_calib_v1_t)) {
+            return false;
+        }
+        const uint8_t *src = (const uint8_t *)&rec->calib;
+        const uint16_t crc_stored =
+            (uint16_t)src[sizeof(imu_calib_v1_t)] |
+            (uint16_t)((uint16_t)src[sizeof(imu_calib_v1_t) + 1] << 8);
+        if (imu_crc16_ccitt(src, sizeof(imu_calib_v1_t)) != crc_stored) {
+            return false;
+        }
+        const imu_calib_v1_t *old = (const imu_calib_v1_t *)src;
+        if (old->rate_hz != 10 && old->rate_hz != 25 &&
+            old->rate_hz != 50 && old->rate_hz != 100) {
+            return false;
+        }
+        imu_calib_defaults(calib);
+        for (int i = 0; i < 3; i++) {
+            calib->gyro_bias[i] = old->gyro_bias[i];
+            calib->mag_hard[i] = old->mag_hard[i];
+            calib->mag_scale[i] = old->mag_scale[i];
+        }
+        calib->declination_deg = old->declination_deg;
+        calib->yaw_offset_deg = old->yaw_offset_deg;
+        calib->azimuth_offset_deg = old->azimuth_offset_deg;
+        calib->rate_hz = old->rate_hz;
+        calib->mag_calibrated = old->mag_calibrated;
+        calib->gyro_calibrated = old->gyro_calibrated;
+        return true;
+    }
+
     if (rec->len != sizeof(imu_calib_t)) {
         return false;
     }
@@ -58,6 +111,9 @@ bool imu_flash_load(imu_calib_t *calib)
     }
     for (int i = 0; i < 3; i++) {
         if (rec->calib.mag_scale[i] < 0.3f || rec->calib.mag_scale[i] > 3.0f) {
+            return false;
+        }
+        if (rec->calib.accel_scale[i] < 0.5f || rec->calib.accel_scale[i] > 2.0f) {
             return false;
         }
     }

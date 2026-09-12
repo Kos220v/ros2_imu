@@ -7,6 +7,7 @@
 
 Сервисы (std_srvs/Trigger):
   ~/mag_calib_start, ~/mag_calib_stop_save, ~/mag_calib_cancel,
+  ~/accel_calib_start, ~/accel_calib_stop_save, ~/accel_calib_cancel,
   ~/gyro_calib, ~/zero_yaw, ~/clear_yaw, ~/save_flash
 
 Параметры rate (10/25/50/100) и declination (град) применяются на лету.
@@ -71,6 +72,15 @@ class BridgeNode(Node):
                      P.CMD_MAG_CALIB_STOP, 'калибровка применена и сохранена')
         self._mk_srv('mag_calib_cancel', lambda: P.cmd_mag_calib_stop(False),
                      P.CMD_MAG_CALIB_STOP, 'калибровка отменена')
+        self._mk_srv('accel_calib_start', P.cmd_accel_calib_start,
+                     P.CMD_ACCEL_CALIB_START,
+                     'положите плату поочерёдно каждой из 6 граней вверх '
+                     '~5 с на грань, затем accel_calib_stop_save')
+        self._mk_srv('accel_calib_stop_save',
+                     lambda: P.cmd_accel_calib_stop(True),
+                     P.CMD_ACCEL_CALIB_STOP, 'калибровка применена и сохранена')
+        self._mk_srv('accel_calib_cancel', lambda: P.cmd_accel_calib_stop(False),
+                     P.CMD_ACCEL_CALIB_STOP, 'калибровка отменена')
         self._mk_srv('gyro_calib', P.cmd_gyro_calib, P.CMD_GYRO_CALIB,
                      'не трогайте плату ~2 с')
         self._mk_srv('zero_yaw', lambda: P.cmd_zero_yaw(False), P.CMD_ZERO_YAW,

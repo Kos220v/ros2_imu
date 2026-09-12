@@ -28,7 +28,9 @@ typedef struct {
     uint8_t rate_hz;
     uint8_t mag_calibrated;
     uint8_t gyro_calibrated;
-    uint8_t reserved;
+    uint8_t accel_calibrated;
+    float accel_offset[3];  /* м/с^2, по осям корпуса */
+    float accel_scale[3];   /* безразмерные, = g / замеренный полуразмах */
 } imu_calib_t;
 
 /* Один отсчёт датчиков в осях платы. */
@@ -68,11 +70,21 @@ typedef struct {
     double sum[3];
 } imu_gyro_calib_t;
 
+/* Состояние сбора калибровки акселерометра (min/max по осям, 6 граней). */
+typedef struct {
+    uint8_t active;
+    uint32_t count;
+    uint32_t target;
+    float min[3];
+    float max[3];
+} imu_accel_calib_t;
+
 typedef struct {
     madgwick_t ahrs;
     imu_calib_t calib;
     imu_mag_calib_t mag_cal;
     imu_gyro_calib_t gyro_cal;
+    imu_accel_calib_t accel_cal;
     float last_yaw_deg;
     float last_azimuth_deg;
     uint8_t seeded; /* 1 = кватернион инициализирован из аксель+маг */
@@ -110,6 +122,14 @@ uint8_t imu_mag_calib_progress(const imu_fusion_t *f);
 /* --- Калибровка гироскопа (плата неподвижна) --- */
 void imu_gyro_calib_start(imu_fusion_t *f, uint32_t target_samples);
 bool imu_gyro_calib_feed(imu_fusion_t *f, float gx, float gy, float gz);
+
+/* --- Калибровка акселерометра (6 граней: поочерёдно каждой гранью вверх) --- */
+void imu_accel_calib_start(imu_fusion_t *f, uint32_t target_samples);
+/* Скормить сырой вектор в осях КОРПУСА (mount применён, кал. НЕ снята).
+ * true = сбор завершён. */
+bool imu_accel_calib_feed(imu_fusion_t *f, float ax, float ay, float az);
+void imu_accel_calib_finish(imu_fusion_t *f, bool apply);
+uint8_t imu_accel_calib_progress(const imu_fusion_t *f);
 
 /* Обнулить курс относительно текущего положения (mode=0) или снять (mode=1). */
 void imu_zero_yaw(imu_fusion_t *f, uint8_t mode);
