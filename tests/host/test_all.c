@@ -257,6 +257,47 @@ static void test_tilt_comp(void)
     CHECK(ang_diff(az, 0.0f) < 1.5f, "tilted north (got %.2f)", az);
 }
 
+/* ---------- 5b. Монтаж магнитомера (GY-273: QMC повёрнут на 180° вокруг X) ----------
+ * Стаб задаёт истинное поле в осях ПЛАТЫ, эмулируя физический монтаж
+ * кристалла (chip = (x, -y, -z)); драйвер должен вернуть оси платы.
+ * Регрессия: «запад/восток перепутаны» + прыжок азимута ~180° при тангаже. */
+static void test_mag_mount(void)
+{
+    stub_reset();
+    const float Fh = 30.0f, Fv = 60.0f, g = 9.80665f;
+    qmc5883l_t mag;
+    I2C_HandleTypeDef hi2c;
+    CHECK(qmc5883l_init(&mag, &hi2c, 0x0Du) == HAL_OK, "mag init");
+
+    /* Плоско, нос на север: поле в осях платы (Fh, 0, -Fv) */
+    stub_mag_set_ut(Fh, 0.0f, -Fv);
+    float mx = 0, my = 0, mz = 0;
+    CHECK(qmc5883l_read(&mag, &mx, &my, &mz) == HAL_OK, "mag read flat");
+    CHECK(fabsf(mx - Fh) < 0.05f && fabsf(my) < 0.05f && fabsf(mz + Fv) < 0.05f,
+          "mag round-trip flat (оси платы)");
+    float az = imu_tilt_compensated_azimuth(0.0f, 0.0f, g, mx, my, mz, 0.0f);
+    CHECK(ang_diff(az, 0.0f) < 1.0f, "az=0 flat north");
+
+    /* Нос вверх 30° (тангаж +30): поле = (Fh·c − Fv·s, 0, −Fh·s − Fv·c) */
+    const float s = 0.5f, c = 0.866f;
+    stub_mag_set_ut(Fh * c - Fv * s, 0.0f, -Fh * s - Fv * c);
+    qmc5883l_read(&mag, &mx, &my, &mz);
+    az = imu_tilt_compensated_azimuth(s * g, 0.0f, c * g, mx, my, mz, 0.0f);
+    CHECK(ang_diff(az, 0.0f) < 1.0f, "az=0 nose-up 30 (было ~180 до фикса)");
+
+    /* Нос вниз 30° (тангаж −30): поле = (Fh·c + Fv·s, 0, Fh·s − Fv·c) */
+    stub_mag_set_ut(Fh * c + Fv * s, 0.0f, Fh * s - Fv * c);
+    qmc5883l_read(&mag, &mx, &my, &mz);
+    az = imu_tilt_compensated_azimuth(-s * g, 0.0f, c * g, mx, my, mz, 0.0f);
+    CHECK(ang_diff(az, 0.0f) < 1.0f, "az=0 nose-down 30 (было ~195 до фикса)");
+
+    /* Нос на восток (az=90), плоско: поле в осях платы (0, Fh, -Fv) */
+    stub_mag_set_ut(0.0f, Fh, -Fv);
+    qmc5883l_read(&mag, &mx, &my, &mz);
+    az = imu_tilt_compensated_azimuth(0.0f, 0.0f, g, mx, my, mz, 0.0f);
+    CHECK(fabsf(az - 90.0f) < 1.0f, "az=90 east (было 270 — W/E зеркало)");
+}
+
 /* ---------- 6. Fusion: сходимость ---------- */
 
 static void feed_north(imu_fusion_t *f, int n)
@@ -799,6 +840,7 @@ int main(void)
     test_proto_resync();
     test_madgwick_cardinal();
     test_tilt_comp();
+    test_mag_mount();
     test_fusion_converge();
     test_mag_calib();
     test_gyro_calib();

@@ -230,8 +230,12 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t DevAddress,
             return HAL_OK;
         }
         if (MemAddress == 0x00u && Size == 6) {
+            /* s_mag_ut задано в ОСЯХ ПЛАТЫ (истинное поле). Кристалл QMC
+             * на GY-273 повёрнут на 180° вокруг X: chip = (x, -y, -z).
+             * Драйвер qmc5883l_read выполняет обратное преобразование. */
+            const float chip[3] = {s_mag_ut[0], -s_mag_ut[1], -s_mag_ut[2]};
             for (int i = 0; i < 3; i++) {
-                int16_t raw = (int16_t)lroundf(s_mag_ut[i] * 30.0f);
+                int16_t raw = (int16_t)lroundf(chip[i] * 30.0f);
                 pData[2 * i] = (uint8_t)(((uint16_t)raw) & 0xFFu);
                 pData[2 * i + 1] = (uint8_t)(((uint16_t)raw >> 8) & 0xFFu);
             }

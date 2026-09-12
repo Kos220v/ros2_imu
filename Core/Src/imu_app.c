@@ -350,7 +350,7 @@ static void imu_diag_status(uint32_t now)
                r->fused_9x ? "9x" : "6x", (unsigned)s_fusion.calib.rate_hz,
                (unsigned)s_stats.frames_sent, (unsigned)mpu_age, (unsigned)mag_age,
                (unsigned)send_age);
-    dbg_printf("  RAW a=(%.2f %.2f %.2f) m=(%.1f %.1f %.1f) [оси чипов, до "
+    dbg_printf("  RAW a=(%.2f %.2f %.2f) m=(%.1f %.1f %.1f) [оси платы, до "
                "remap/калибровки]\r\n",
                s_last_raw.ax, s_last_raw.ay, s_last_raw.az,
                s_last_raw.mx, s_last_raw.my, s_last_raw.mz);
