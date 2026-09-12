@@ -270,7 +270,7 @@ static void imu_diag_boot(void)
     if (probe_addr(IMU_MPU6050_ADDR7)) {
         (void)HAL_I2C_Mem_Read(s_hi2c, (uint16_t)IMU_MPU6050_ADDR7 << 1, 0x75u,
                                I2C_MEMADD_SIZE_8BIT, &who, 1, IMU_I2C_TIMEOUT_MS);
-        dbg_printf("MPU WHO_AM_I: 0x%02x (ожидаем 0x68 при AD0=GND)\r\n",
+        dbg_printf("MPU WHO_AM_I: 0x%02x (0x68=MPU6050, 0x70=MPU6500/клон)\r\n",
                    (unsigned)who);
     }
     uint8_t cid = 0;
@@ -386,7 +386,13 @@ void ImuApp_Init(I2C_HandleTypeDef *hi2c, UART_HandleTypeDef *huart_data,
             HAL_Delay(50);
         }
     }
-    dbg_printf("MPU6050: %s\r\n", s_mpu_ok ? "OK" : "FAIL");
+    if (s_mpu_ok) {
+        dbg_printf("MPU: OK, WHO_AM_I 0x%02x (%s)\r\n", (unsigned)s_mpu.who_id,
+                   s_mpu.who_id == MPU6050_WHO_AM_I_VAL ? "MPU6050"
+                                                        : "MPU6500/клон");
+    } else {
+        dbg_print("MPU: FAIL (нет на шине или чужой WHO_AM_I)\r\n");
+    }
 
     s_mag_ok = 0;
     for (int i = 0; i < 3 && !s_mag_ok; i++) {

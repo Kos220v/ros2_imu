@@ -463,6 +463,17 @@ static void test_drivers(void)
     CHECK_CLOSE(gx, 0.0f, 1e-6f, "mpu gx=0");
     CHECK_CLOSE(t, 36.53f, 0.01f, "mpu temp");
 
+    /* MPU6500/клон (GY-521): WHO_AM_I = 0x70, карта регистров та же */
+    stub_mpu_set_who(MPU6500_WHO_AM_I_VAL);
+    CHECK(mpu6050_init(&mpu, &hi2c, 0x68u) == HAL_OK, "mpu6500 init");
+    CHECK(mpu.who_id == MPU6500_WHO_AM_I_VAL, "mpu6500 who id");
+    stub_mpu_set_who(MPU6050_WHO_AM_I_VAL);
+
+    /* Чужой ID -> инициализация не проходит */
+    stub_mpu_set_who(0x33u);
+    CHECK(mpu6050_init(&mpu, &hi2c, 0x68u) != HAL_OK, "mpu bad who");
+    stub_mpu_set_who(MPU6050_WHO_AM_I_VAL);
+
     qmc5883l_t mag;
     CHECK(qmc5883l_init(&mag, &hi2c, 0x0Du) == HAL_OK, "qmc init");
     CHECK(writes_contain(0x1Au, 0x09u, 0x19u), "qmc ctrl1");

@@ -84,6 +84,7 @@ HAL_StatusTypeDef mpu6050_init(mpu6050_t *dev, I2C_HandleTypeDef *hi2c, uint8_t 
     dev->acc_lsb_per_g = mpu_acc_lsb(IMU_MPU_ACCEL_FS_G);
     dev->gyro_lsb_per_dps = mpu_gyro_lsb(IMU_MPU_GYRO_FS_DPS);
     dev->ok = 0;
+    dev->who_id = 0;
 
     if (HAL_I2C_IsDeviceReady(hi2c, dev->dev_addr, 3, IMU_I2C_TIMEOUT_MS) != HAL_OK) {
         return HAL_ERROR;
@@ -94,9 +95,11 @@ HAL_StatusTypeDef mpu6050_init(mpu6050_t *dev, I2C_HandleTypeDef *hi2c, uint8_t 
                          &who, 1, IMU_I2C_TIMEOUT_MS) != HAL_OK) {
         return HAL_ERROR;
     }
-    if (who != MPU6050_WHO_AM_I_VAL) {
+    /* 0x68 = MPU6050; 0x70 = MPU6500/клон (GY-521), совместим по регистрам */
+    if (who != MPU6050_WHO_AM_I_VAL && who != MPU6500_WHO_AM_I_VAL) {
         return HAL_ERROR;
     }
+    dev->who_id = who;
 
     /* Пробуждение: источник тактирования - PLL по гиро X */
     if (mpu_write(dev, MPU_REG_PWR_MGMT_1, 0x01u) != HAL_OK) {

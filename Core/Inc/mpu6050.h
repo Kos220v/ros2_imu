@@ -11,6 +11,9 @@ extern "C" {
 #endif
 
 #define MPU6050_WHO_AM_I_VAL 0x68u
+/* MPU6500 (и клоны на его основе, часто на модулях GY-521/GY-271): карта
+ * регистров та же, что у MPU6050, различается только WHO_AM_I. */
+#define MPU6500_WHO_AM_I_VAL 0x70u
 
 typedef struct {
     I2C_HandleTypeDef *hi2c;
@@ -18,6 +21,7 @@ typedef struct {
     float acc_lsb_per_g;
     float gyro_lsb_per_dps;
     uint8_t ok;
+    uint8_t who_id; /* WHO_AM_I: 0x68 = MPU6050, 0x70 = MPU6500/клон */
 } mpu6050_t;
 
 /* Инициализация: пробуждение, DLPF, диапазоны, bypass для AUX I2C. */

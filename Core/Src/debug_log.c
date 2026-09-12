@@ -110,7 +110,7 @@ static void emit_float(char *buf, size_t cap, size_t *pos, double d, int width)
     }
 }
 
-/* Формат: %s %d %u %x %c %f; ширина и нули: %02x, %-подобного нет
+/* Формат: %s %d %u %x %X %c %f; ширина и нули: %02x, %-подобного нет
  * (width без знака = пробелы, с '0' = нули). */
 void dbg_printf(const char *fmt, ...)
 {
@@ -151,6 +151,7 @@ void dbg_printf(const char *fmt, ...)
                       width, zero_pad);
             break;
         case 'x':
+        case 'X':
             emit_uint(buf, sizeof(buf) - 1, &pos, va_arg(ap, unsigned int), 1,
                       width, zero_pad);
             break;

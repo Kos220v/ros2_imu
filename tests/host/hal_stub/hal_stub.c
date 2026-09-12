@@ -21,6 +21,7 @@ static uint8_t *s_rx_ptr;
 static uint16_t s_rx_size;
 
 static int s_mpu_present = 1;
+static uint8_t s_mpu_who = 0x68u; /* WHO_AM_I MPU */
 static int s_mag_present = 1;
 static int s_mag_is_hmc = 0; /* 0: QMC5883L@0x0D, 1: HMC5883L@0x1E */
 static int s_mag_dual = 0;   /* оба варианта на шине */
@@ -48,6 +49,7 @@ void stub_reset(void)
     s_rx_ptr = NULL;
     s_rx_size = 0;
     s_mpu_present = 1;
+    s_mpu_who = 0x68u;
     s_mag_present = 1;
     s_mag_is_hmc = 0;
     s_mag_dual = 0;
@@ -94,6 +96,12 @@ void stub_i2c_set_present(int mpu, int mag)
 {
     s_mpu_present = mpu;
     s_mag_present = mag;
+}
+
+/* WHO_AM_I MPU (0x68 = MPU6050, 0x70 = MPU6500/клон, другое = чужой чип) */
+void stub_mpu_set_who(uint8_t who)
+{
+    s_mpu_who = who;
 }
 
 void stub_mpu_set_raw(int16_t ax, int16_t ay, int16_t az, int16_t t,
@@ -201,7 +209,7 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t DevAddress,
     }
     if (DevAddress == STUB_MPU_ADDR) {
         if (MemAddress == 0x75u && Size == 1) { /* WHO_AM_I */
-            pData[0] = 0x68u;
+            pData[0] = s_mpu_who;
             return HAL_OK;
         }
         if (MemAddress == 0x3Bu && Size == 14) {
