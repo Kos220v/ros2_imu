@@ -98,6 +98,55 @@ def horizon_scene(roll_deg: float, pitch_deg: float, w: int, h: int,
     return sky, ground, marks, ts(-big, off), ts(big, off)
 
 
+def sim_orientation(t: float) -> 'proto.Orientation':
+    """Кадр симуляции на момент времени t секунд (чистая функция, без GUI).
+
+    Движение: медленное вращение по азимуту (20 град/с, по часовой),
+    плавные качания крена (±8°) и тангажа (±6°), гравитация 9.81 м/с²,
+    магнитное поле 43 мкТл, температура ~36.5 °C. Все статусы «OK»,
+    фьюжн 9 осей. Используется режимом --sim и юнит-тестами.
+    """
+    g = 9.81
+    az = (20.0 * t) % 360.0
+    roll = math.radians(8.0 * math.sin(0.4 * t))
+    pitch = math.radians(6.0 * math.sin(0.27 * t + 1.3))
+    yaw = -math.radians(az)  # азимут по часовой => yaw против часовой
+
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+
+    # Гравитация в координатах платформы (платформа неподвижна)
+    ax = g * math.sin(pitch)
+    ay = -g * math.sin(roll) * math.cos(pitch)
+    az_a = g * math.cos(roll) * math.cos(pitch)
+
+    # Магнитное поле мира (N, E, D) в координатах платформы
+    fn, fe, fd = 20.0, 27.0, -45.0
+    mx = fn * math.cos(yaw) + fe * math.sin(yaw)
+    my = -fn * math.sin(yaw) + fe * math.cos(yaw)
+    mz = fd
+
+    return proto.Orientation(
+        ts_ms=int(t * 1000.0) % (2 ** 32),
+        qw=qw, qx=qx, qy=qy, qz=qz,
+        roll_deg=math.degrees(roll), pitch_deg=math.degrees(pitch),
+        yaw_deg=math.degrees(yaw), azimuth_deg=az,
+        wx=math.radians(8.0 * 0.4 * math.cos(0.4 * t)),
+        wy=math.radians(6.0 * 0.27 * math.cos(0.27 * t + 1.3)),
+        wz=-math.radians(20.0),
+        ax=ax, ay=ay, az=az_a,
+        mx=mx, my=my, mz=mz,
+        temp_c=36.5 + 0.3 * math.sin(t / 7.0),
+        status=(proto.STATUS_MPU_OK | proto.STATUS_MAG_OK | proto.STATUS_MAG_CAL
+                | proto.STATUS_GYRO_CAL | proto.STATUS_FUSED_9X),
+        calib_state=0, rate_hz=50)
+
+
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
@@ -131,10 +180,14 @@ class ImuViewer:
     COMPASS_SIZE = 250
     HORIZON_SIZE = 250
 
-    def __init__(self, root: 'tk.Tk') -> None:
+    def __init__(self, root: 'tk.Tk', sim: bool = False) -> None:
         self.root = root
-        root.title("IMU viewer — STM32F303 (MPU6050 + QMC5883L)")
+        title = "IMU viewer — STM32F303 (MPU6050 + QMC5883L)"
+        if sim:
+            title += " [симуляция]"
+        root.title(title)
         root.geometry("1080x660")
+        self._sim_mode = sim
 
         # Состояние
         self._rx_q: 'queue.Queue' = queue.Queue()
@@ -291,6 +344,10 @@ class ImuViewer:
     # ----------------------------- порт / поток ---------------------------
 
     def _refresh_ports(self) -> None:
+        if self._sim_mode:
+            self.cb_port.config(values=["(симуляция)"], state="readonly")
+            self.cb_port.current(0)
+            return
         if serial is None:
             self.cb_port.config(values=[], state="normal")
             return
@@ -308,20 +365,23 @@ class ImuViewer:
             self._apply_conn("не подключено", "#888")
             self.btn_connect.config(text="Подключиться")
             return
-        if serial is None:
-            messagebox.showerror(
-                "Нет pyserial",
-                "Не установлен pyserial.\n\nВыполните:\n    pip install pyserial")
-            return
-        port = (self.cb_port.get() or "").strip()
-        if not port:
-            messagebox.showerror("Нет порта", "Выберите COM-порт.")
-            return
-        try:
-            baud = int(self.cb_baud.get())
-        except ValueError:
-            messagebox.showerror("Бит/с", "Некорректная скорость.")
-            return
+        if self._sim_mode:
+            port, baud = "(симуляция)", 115200
+        else:
+            if serial is None:
+                messagebox.showerror(
+                    "Нет pyserial",
+                    "Не установлен pyserial.\n\nВыполните:\n    pip install pyserial")
+                return
+            port = (self.cb_port.get() or "").strip()
+            if not port:
+                messagebox.showerror("Нет порта", "Выберите COM-порт.")
+                return
+            try:
+                baud = int(self.cb_baud.get())
+            except ValueError:
+                messagebox.showerror("Бит/с", "Некорректная скорость.")
+                return
         self._port, self._baud = port, baud
         self._want_connect = True
         self._decoder = proto.Decoder()
@@ -330,7 +390,8 @@ class ImuViewer:
         self.btn_connect.config(text="Отключиться")
         self._ui_q.put(("conn", "подключение…", "#d4a017"))
         self._log(f"Подключение к {port} @ {baud}…")
-        self._thread = threading.Thread(target=self._reader_loop, daemon=True)
+        loop = self._sim_loop if self._sim_mode else self._reader_loop
+        self._thread = threading.Thread(target=loop, daemon=True)
         self._thread.start()
 
     def _reader_loop(self) -> None:
@@ -374,14 +435,48 @@ class ImuViewer:
                 time.sleep(1.0)
         self._ui_q.put(("conn", "не подключено", "#888"))
 
+    def _sim_loop(self) -> None:
+        """Симуляция (без железа): INFO при старте, кадры 50 Гц,
+        ответы ACK на команды из панели. Только очередь, без виджетов."""
+        t0 = time.monotonic()
+        time.sleep(0.3)
+        if self._want_connect:
+            info = proto.Info(fw_major=0, fw_minor=1, fw_patch=0,
+                              uptime_ms=3600000, board="SIM-IMU",
+                              mpu_ok=1, mag_ok=1, mag_cal=1, gyro_cal=1,
+                              declination_deg=11.5, rate_hz=50)
+            self._rx_q.put((proto.MSG_INFO, info.to_payload()))
+            self._log("Симуляция: генерация кадров 50 Гц (без железа)")
+        next_t = t0
+        while self._want_connect:
+            now = time.monotonic()
+            try:
+                while True:
+                    frame = self._cmd_q.get_nowait()
+                    # Кадр: AA 55 LEN ID ... CRC16 — команда в 4-м байте
+                    cmd_id = frame[3] if len(frame) > 3 else 0
+                    ack = proto.Ack(cmd_id=cmd_id, result=proto.ACK_OK, info=0)
+                    self._rx_q.put((proto.MSG_ACK, ack.to_payload()))
+            except queue.Empty:
+                pass
+            if now >= next_t:
+                next_t = max(next_t + 0.02, now)
+                o = sim_orientation(now - t0)
+                self._rx_q.put((proto.MSG_ORIENTATION, o.to_payload()))
+            time.sleep(0.005)
+        self._ui_q.put(("conn", "не подключено", "#888"))
+
     def _send(self, frame: bytes, label: str) -> None:
-        if self._ser is None or not self._want_connect:
+        if not self._want_connect or (self._ser is None and not self._sim_mode):
             messagebox.showinfo("Нет подключения", "Порт не подключён.")
             return
         self._cmd_q.put(frame)
         self._log(f"→ {label}")
 
     # ----------------------------- цикл UI --------------------------------
+
+    def _log(self, msg: str) -> None:
+        self._append_log(msg)
 
     def _append_log(self, msg: str) -> None:
         self.log.config(state="normal")
@@ -566,13 +661,21 @@ class ImuViewer:
                           font=("Consolas", 10))
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="IMU viewer — тестовое приложение для инерционного модуля")
+    ap.add_argument("--sim", action="store_true",
+                    help="симуляция: данные генерируются внутри приложения "
+                         "(50 Гц), порт и pyserial не нужны")
+    args = ap.parse_args(argv)
     if tk is None:
         print("В этом Python нет tkinter (в стандартном инсталляторе "
               "Windows он входит по умолчанию).")
         return 1
-    if serial is None:
-        print("Не установлен pyserial. Выполните:  pip install pyserial")
+    if serial is None and not args.sim:
+        print("Не установлен pyserial. Выполните:  pip install pyserial\n"
+              "(для режима --sim pyserial не нужен)")
         return 1
     try:  # чёткая отрисовка на HiDPI (Windows)
         import ctypes
@@ -580,7 +683,7 @@ def main() -> int:
     except Exception:
         pass
     root = tk.Tk()
-    ImuViewer(root)
+    ImuViewer(root, sim=args.sim)
     root.mainloop()
     return 0
 

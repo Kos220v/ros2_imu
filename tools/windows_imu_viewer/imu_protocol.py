@@ -176,6 +176,14 @@ class Info:
                    mpu_ok=f[6], mag_ok=f[7], mag_cal=f[8], gyro_cal=f[9],
                    declination_deg=f[10], rate_hz=f[11])
 
+    def to_payload(self) -> bytes:
+        board = self.board.encode('ascii', 'replace')[:16].ljust(16, b'\x00')
+        return INFO_STRUCT.pack(self.fw_major, self.fw_minor, self.fw_patch, 0,
+                                self.uptime_ms, board,
+                                self.mpu_ok, self.mag_ok, self.mag_cal,
+                                self.gyro_cal, self.declination_deg,
+                                self.rate_hz, 0, 0, 0)
+
 
 @dataclass
 class Ack:
@@ -187,6 +195,9 @@ class Ack:
     def from_payload(cls, payload: bytes) -> 'Ack':
         cmd_id, result, info = ACK_STRUCT.unpack(payload)
         return cls(cmd_id, result, info)
+
+    def to_payload(self) -> bytes:
+        return ACK_STRUCT.pack(self.cmd_id, self.result, self.info)
 
 
 @dataclass

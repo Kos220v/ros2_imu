@@ -119,4 +119,39 @@ _, _, _, h1, h2 = viewer.horizon_scene(90.0, 0.0, 250, 250)
 ok(abs(h1[0] - 125) < 1e-6 and abs(h2[0] - 125) < 1e-6
    and abs(h2[1] - h1[1]) > 100, "крен 90 -> горизонт вертикален")
 
+# --- 6. Info/Ack: to_payload совпадает с эталоном, round-trip ---------------
+info = r.Info(fw_major=0, fw_minor=1, fw_patch=0, uptime_ms=3600000,
+              board="IMU-STM32", mpu_ok=1, mag_ok=1, mag_cal=0, gyro_cal=1,
+              declination_deg=11.5, rate_hz=50)
+ok(w.Info.to_payload(info) == r.Info.to_payload(info), "Info.to_payload == ROS")
+ok(r.Info.from_payload(w.Info.to_payload(info)).board == "IMU-STM32",
+   "Info round-trip")
+ack = r.Ack(cmd_id=r.CMD_PING, result=r.ACK_OK, info=7)
+ok(w.Ack.to_payload(ack) == r.Ack.to_payload(ack), "Ack.to_payload == ROS")
+
+# --- 7. Симуляция вьювера: 5 с кадров через декодер -------------------------
+import math as _math  # noqa: E402
+sim_stream = b""
+for k in range(250):  # 5 секунд @ 50 Гц
+    o = viewer.sim_orientation(k / 50.0)
+    sim_stream += w.encode_frame(w.MSG_ORIENTATION, o.to_payload())
+sim_res = w.Decoder().feed(sim_stream)
+ok(len(sim_res) == 250, "sim: 250 кадров прошло через декодер")
+ok(all(m == w.MSG_ORIENTATION for m, _ in sim_res), "sim: все кадры ORIENTATION")
+prev_az = None
+for k, (_mid, pay) in enumerate(sim_res):
+    o = w.Orientation.from_payload(pay)
+    ok(0.0 <= o.azimuth_deg < 360.0, f"sim[{k}]: az в 0..360")
+    if prev_az is not None:
+        ok((o.azimuth_deg - prev_az) % 360.0 < 2.0, f"sim[{k}]: az монотонен")
+    prev_az = o.azimuth_deg
+for k in (0, 125, 249):
+    o = w.Orientation.from_payload(sim_res[k][1])
+    qn = _math.sqrt(o.qw**2 + o.qx**2 + o.qy**2 + o.qz**2)
+    ok(abs(qn - 1.0) < 1e-5, f"sim[{k}]: кватернион нормирован")
+    amag = _math.sqrt(o.ax**2 + o.ay**2 + o.az**2)
+    ok(abs(amag - 9.81) < 0.05, f"sim[{k}]: |a| = g")
+    ok(o.status & (w.STATUS_MPU_OK | w.STATUS_MAG_OK | w.STATUS_FUSED_9X),
+       f"sim[{k}]: статусы MPU/MAG/9x")
+
 print(f"windows protocol mirror: {CHECKS} checks OK")
