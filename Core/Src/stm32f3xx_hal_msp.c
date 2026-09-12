@@ -89,7 +89,11 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
   if(hi2c->Instance==I2C1)
   {
   /* USER CODE BEGIN I2C1_MspInit 0 */
-
+    /* PA15 по умолчанию — JTDI (JTAG). На STM32F3 пин JTAG освобождается, как
+       только он запрограммирован в альтернативную функцию (RM0316, §33.4.4),
+       т.е. HAL_GPIO_Init(..., GPIO_AF4_I2C1) ниже достаточно. Писать AFIO
+       (как на F1) на F3 не нужно и нечем: в HAL/CMSIS для F303 определений
+       AFIO/SWJ_CFG нет. SWD для прошивки (PA13/PA14) при этом работает. */
   /* USER CODE END I2C1_MspInit 0 */
 
     __HAL_RCC_GPIOA_CLK_ENABLE();
